@@ -539,12 +539,15 @@ def run_mixed(jwt, sub, info, delay_ms):
     print(); S.running = False; _summary("Mixed (XP+Gems)", S.xp, f"XP  /  {S.gems} gems")
 
 # ── Practice Farm (Playwright) ─────────────────────────────────────────────────
+# Strategy: mirrors the DuoHacker userscript autoSolver exactly.
+# window.sol  = currentChallenge from React fiber (injected via page.evaluate)
+# Challenge types and selectors match handleChallenge() in the userscript.
+
 def _has_playwright() -> bool:
     import importlib.util
     return importlib.util.find_spec("playwright") is not None
 
 def _chromium_installed() -> bool:
-    """Return True only if the Chromium binary actually exists on disk."""
     try:
         from playwright.sync_api import sync_playwright
         import os
@@ -554,7 +557,6 @@ def _chromium_installed() -> bool:
         return False
 
 def _install_playwright():
-    """Install the playwright package and download the Chromium browser."""
     log("Installing playwright package...", "info")
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "--quiet", "playwright"],
@@ -563,14 +565,10 @@ def _install_playwright():
     log("Downloading Chromium (this may take a few minutes)...", "info")
     ret = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"]).returncode
     if ret != 0:
-        raise RuntimeError("playwright install chromium failed (exit code {ret})")
+        raise RuntimeError(f"playwright install chromium failed (exit {ret})")
     log("Chromium installed.", "success")
 
 def _ensure_playwright() -> bool:
-    """
-    Guarantee both the package AND the browser binary are ready.
-    Returns True if ready to use, False if user declined or install failed.
-    """
     if not _has_playwright():
         log("playwright package is not installed.", "warning")
         if not ask_confirm("  Install playwright now? (~150 MB, one-time setup)", default=True):
@@ -578,23 +576,259 @@ def _ensure_playwright() -> bool:
         try:
             _install_playwright()
         except Exception as e:
-            log(f"Install failed: {e}", "error")
-            return False
-
-    # Package is present — now check the binary
+            log(f"Install failed: {e}", "error"); return False
     if not _chromium_installed():
-        log("playwright is installed but Chromium browser binary is missing.", "warning")
-        log("This happens after a fresh pip install or a playwright update.", "info")
+        log("playwright installed but Chromium binary is missing.", "warning")
+        log("This happens after a fresh pip install or playwright update.", "info")
         if not ask_confirm("  Download Chromium now? (~150 MB, one-time)", default=True):
             return False
-        log("Running: playwright install chromium...", "info")
         ret = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"]).returncode
         if ret != 0:
-            log("Browser download failed. Run manually:  playwright install chromium", "error")
-            return False
-        log("Chromium downloaded successfully.", "success")
-
+            log("Download failed. Run manually: playwright install chromium", "error"); return False
+        log("Chromium downloaded.", "success")
     return True
+
+# ── JavaScript injected into the page to solve challenges ─────────────────────
+# Mirrors handleChallenge() + determineChallengeType() from the userscript.
+# window.sol is populated by Duolingo's React fiber via findReact().
+_JS_FIND_REACT = """
+(function(){
+  function findReact(dom, up=1){
+    const key = Object.keys(dom).find(k =>
+      k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+    if(!key) return null;
+    let fiber = dom[key];
+    let n = 0;
+    while(fiber && n < up){ fiber = fiber.return; n++; }
+    while(fiber){
+      if(fiber.memoizedProps?.currentChallenge) return fiber.memoizedProps;
+      fiber = fiber.return;
+    }
+    return null;
+  }
+  const el = document.querySelector('._3yE3H') ||
+             document.querySelector('[data-test="challenge"]') ||
+             document.querySelector('[class*="challenge-"]');
+  if(!el) return null;
+  const props = findReact(el, 1);
+  return props ? props.currentChallenge : null;
+})()
+"""
+
+_JS_SOLVE = """
+(function(sol){
+  if(!sol) return 'no_sol';
+  window.sol = sol;
+
+  // ── determine type ───────────────────────────────────────────────────────
+  let type = null;
+  if(sol.type==='arrange')                              type='Story Arrange';
+  else if(sol.type==='multiple-choice'||sol.type==='select-phrases') type='Story Multiple Choice';
+  else if(sol.type==='point-to-phrase')                 type='Story Point to Phrase';
+  else if(sol.type==='match'&&sol.pairs)                type='Story Pairs';
+  else if(sol.type==='tapCompleteTable')                type='Tap Complete Table';
+  else if(sol.type==='typeCloze')                       type='Type Cloze';
+  else if(sol.type==='typeClozeTable')                  type='Type Cloze Table';
+  else if(sol.type==='tapClozeTable')                   type='Tap Cloze Table';
+  else if(sol.type==='typeCompleteTable')               type='Type Complete Table';
+  else if(sol.type==='patternTapComplete')              type='Pattern Tap Complete';
+  else if(sol.type==='listenMatch')                     type='Listen Match';
+  else if(sol.type==='listenTap')                       type='Listen Tap';
+  else if(sol.type==='listen')                          type='Listen Challenge';
+  else if(sol.type==='speak')                           type='Challenge Speak';
+  else if(sol.type==='listenSpeak')                     type='Listen Speak';
+  else if(sol.pairs!==undefined)                        type='Pairs';
+  else if(sol.correctTokens!==undefined)               type='Tokens Run';
+  else if(sol.correctIndices!==undefined)              type='Indices Run';
+  else if(sol.articles)                                type='Challenge Name';
+  else if(sol.choices&&sol.correctIndex!==undefined&&!sol.displayTokens) type='Challenge Choice';
+  else if(sol.choices&&sol.correctIndex!==undefined&&sol.displayTokens)  type='Challenge Choice with Text Input';
+  else if(document.querySelector('textarea[data-test="challenge-translate-input"]')) type='Challenge Translate Input';
+  else if(document.querySelector('[data-test="challenge-text-input"]'))  type='Challenge Text Input';
+  else if(document.querySelector('[data-test*="challenge-partialReverseTranslate"]'))type='Partial Reverse';
+  else if(sol.displayTokens)                           type='Tap Complete';
+  if(!type) return 'unknown_type';
+
+  // ── skip audio challenges ────────────────────────────────────────────────
+  const audioTypes = ['Challenge Speak','Listen Challenge','Listen Match','Listen Tap','Listen Speak'];
+  if(audioTypes.includes(type)){
+    const skip = document.querySelector('button[data-test="player-skip"]');
+    if(skip&&!skip.disabled) skip.click();
+    return 'skipped:'+type;
+  }
+
+  // ── solve by type ────────────────────────────────────────────────────────
+  if(type==='Challenge Choice'){
+    const choices = document.querySelectorAll("[data-test='challenge-choice']");
+    if(choices.length>0 && sol.correctIndex!==undefined) choices[sol.correctIndex].click();
+  }
+  else if(type==='Challenge Choice with Text Input'){
+    const choices = document.querySelectorAll("[data-test='challenge-choice']");
+    if(choices.length>0 && sol.correctIndex!==undefined) choices[sol.correctIndex].click();
+    const elm = document.querySelectorAll('[data-test="challenge-text-input"]')[0];
+    if(elm){
+      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      setter.call(elm, ans);
+      elm.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  }
+  else if(type==='Challenge Translate Input'){
+    const elm = document.querySelector('textarea[data-test="challenge-translate-input"]');
+    if(elm){
+      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
+      setter.call(elm, ans);
+      elm.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  }
+  else if(type==='Challenge Text Input'){
+    const elm = document.querySelectorAll('[data-test="challenge-text-input"]')[0];
+    if(elm){
+      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      setter.call(elm, ans);
+      elm.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  }
+  else if(type==='Partial Reverse'){
+    const elm = document.querySelector('[data-test*="challenge-partialReverseTranslate"]')
+                      ?.querySelector('span[contenteditable]');
+    if(elm){
+      const ans = sol.displayTokens?.filter(t=>t.isBlank)?.map(t=>t.text)?.join('')||'';
+      const setter = Object.getOwnPropertyDescriptor(Node.prototype,'textContent').set;
+      setter.call(elm, ans);
+      elm.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  }
+  else if(type==='Pairs'||type==='Story Pairs'){
+    const nl = document.querySelectorAll('[data-test*="challenge-tap-token"]:not(span)');
+    sol.pairs?.forEach(pair=>{
+      for(let i=0;i<nl.length;i++){
+        const txt = nl[i].querySelector('[data-test="challenge-tap-token-text"]')?.innerText?.toLowerCase()?.trim();
+        if((txt===pair.learningToken?.toLowerCase()?.trim()||txt===pair.fromToken?.toLowerCase()?.trim())&&!nl[i].disabled)
+          nl[i].click();
+      }
+    });
+  }
+  else if(type==='Tap Complete'){
+    // word-bank tap: click tokens in order matching displayTokens blanks
+    const bank = document.querySelector('[data-test="word-bank"]');
+    const blanks = sol.displayTokens?.filter(t=>t.isBlank)||[];
+    if(bank&&blanks.length){
+      blanks.forEach(blank=>{
+        const btns = Array.from(bank.querySelectorAll('button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
+        const target = btns.find(b=>b.innerText.trim()===blank.text);
+        if(target) target.click();
+      });
+    }
+  }
+  else if(type==='Type Cloze'){
+    const input = document.querySelector('input[type="text"].b4jqk');
+    if(input){
+      const tok = sol.displayTokens?.find(t=>t.damageStart!==undefined);
+      const ans = tok ? tok.text.slice(tok.damageStart) : '';
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      setter.call(input, ans);
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+  }
+  else if(type==='Pattern Tap Complete'){
+    const bank = document.querySelector('[data-test="word-bank"],.eSgkc');
+    if(bank){
+      const correctText = sol.choices?.[sol.correctIndex??0];
+      const btns = Array.from(bank.querySelectorAll('button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
+      const target = btns.find(b=>b.innerText.trim()===correctText);
+      if(target) target.click();
+    }
+  }
+  else if(type==='Challenge Name'){
+    const arts = sol.articles||[];
+    const correct = sol.correctSolutions?.[0]||'';
+    const art = arts.find(a=>correct.startsWith(a));
+    const idx = art!==undefined ? arts.indexOf(art) : 0;
+    const sel = document.querySelector(`[data-test="challenge-choice"]:nth-child(${idx+1})`);
+    if(sel) sel.click();
+    const remaining = art ? correct.substring(art.length).trim() : correct;
+    const elm = document.querySelector('[data-test="challenge-text-input"]');
+    if(elm){
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      setter.call(elm, remaining);
+      elm.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  }
+  else if(type==='Story Arrange'){
+    const choices = document.querySelectorAll('[data-test*="challenge-tap-token"]:not(span)');
+    sol.phraseOrder?.forEach(i=>{ if(choices[i]) choices[i].click(); });
+  }
+  else if(type==='Story Multiple Choice'){
+    const choices = document.querySelectorAll('[data-test="stories-choice"]');
+    if(choices[sol.correctAnswerIndex]) choices[sol.correctAnswerIndex].click();
+  }
+  else if(type==='Story Point to Phrase'){
+    const choices = document.querySelectorAll('[data-test="challenge-tap-token-text"]');
+    let ci=-1;
+    sol.parts?.forEach((p,i)=>{
+      if(p.selectable){ ci++;
+        if(sol.correctAnswerIndex===i&&choices[ci]) choices[ci].parentElement.click();
+      }
+    });
+  }
+
+  return 'solved:'+type;
+})(arguments[0])
+"""
+
+_JS_CLICK_NEXT = """
+(function(){
+  const btn = document.querySelector('[data-test="player-next"]') ||
+              document.querySelector('[data-test="stories-player-continue"]') ||
+              document.querySelector('[data-test="stories-player-done"]');
+  if(btn && btn.getAttribute('aria-disabled')!=='true' && !btn.disabled){
+    btn.click(); return true;
+  }
+  return false;
+})()
+"""
+
+_JS_SESSION_DONE = """
+(function(){
+  return !!(document.querySelector('[data-test="session-complete-slide"]') ||
+            document.querySelector('[data-test="session-over"]') ||
+            document.querySelector('[data-test="challenge-complete"]') ||
+            document.querySelector('[data-test="session-complete"]'));
+})()
+"""
+
+_CHALLENGE_TYPE_LABELS = {
+    "Challenge Choice":                "radio select",
+    "Challenge Choice with Text Input":"radio + text input",
+    "Challenge Translate Input":       "translate (textarea)",
+    "Challenge Text Input":            "text input",
+    "Partial Reverse":                 "partial reverse translate",
+    "Pairs":                           "match pairs",
+    "Story Pairs":                     "story pairs",
+    "Tap Complete":                    "word bank tap",
+    "Type Cloze":                      "type cloze",
+    "Pattern Tap Complete":            "pattern tap",
+    "Challenge Name":                  "article + name",
+    "Story Arrange":                   "arrange phrase",
+    "Story Multiple Choice":           "story MCQ",
+    "Story Point to Phrase":           "point to phrase",
+    "Type Cloze Table":                "type cloze table",
+    "Tap Cloze Table":                 "tap cloze table",
+    "Type Complete Table":             "type complete table",
+    "Tap Complete Table":              "tap complete table",
+}
+
+def _type_label(raw: str) -> str:
+    if raw.startswith("solved:"):
+        t = raw[7:]
+        return _CHALLENGE_TYPE_LABELS.get(t, t)
+    if raw.startswith("skipped:"):
+        return f"skip  [{raw[8:].lower()}]"
+    return raw
 
 def run_practice(jwt: str, headless: bool = True, loops: int = 10):
     print()
@@ -606,85 +840,121 @@ def run_practice(jwt: str, headless: bool = True, loops: int = 10):
     print()
     log(f"Practice Farm  |  loops={loops}  headless={headless}", "farm")
     log("Launching browser...", "info")
+    print()
 
     S.running = True; S.t0 = time.time()
-    completed = tick = 0
-
-    _SEL = {
-        "word_bank":  "[data-test='challenge-tap-token-text']",
-        "radio":      "[data-test='challenge-choice']",
-        "input":      "textarea[data-test='challenge-translate-input']",
-        "continue":   "[data-test='player-next']",
-        "done":       "[data-test='player-done']",
-        "skip_btn":   "[data-test='player-skip']",
-    }
-
-    def _answer(page):
-        tokens = page.locator(_SEL["word_bank"]).all()
-        if tokens:
-            for t in tokens[:7]:
-                try: t.click(timeout=700)
-                except: pass
-            return
-        try:
-            page.locator(_SEL["radio"]).first.click(timeout=1200)
-            return
-        except: pass
-        try:
-            page.locator(_SEL["input"]).first.fill("a", timeout=800)
-        except: pass
-
-    def _click(page, sel, t=2000) -> bool:
-        try: page.locator(sel).first.click(timeout=t); return True
-        except: return False
+    completed = total_xp_gained = tick = 0
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless,
-                                     args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
-        ctx  = browser.new_context(
+        browser = pw.chromium.launch(
+            headless=headless,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        ctx = browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=_ua(),
             locale="en-US",
         )
-        ctx.add_cookies([{"name": "jwt_token", "value": jwt,
-                          "domain": ".duolingo.com", "path": "/",
-                          "secure": True, "httpOnly": False}])
+        ctx.add_cookies([{
+            "name": "jwt_token", "value": jwt,
+            "domain": ".duolingo.com", "path": "/",
+            "secure": True, "httpOnly": False,
+        }])
+
         page = ctx.new_page()
         page.goto("https://www.duolingo.com/", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(2000)
 
         for loop in range(loops):
             if not S.running: break
             tick += 1
+
             try:
                 page.goto("https://www.duolingo.com/practice",
-                          wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(1800)
+                          wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(2000)
 
-                for _ in range(30):
+                # Wait for first challenge to appear
+                try:
+                    page.wait_for_selector(
+                        '._3yE3H, [data-test="challenge"]',
+                        timeout=10000,
+                    )
+                except PWTimeout:
+                    log(f"\n  Loop {loop+1}: challenge container not found, skipping", "warning")
+                    S.errors += 1; continue
+
+                challenges_solved = 0
+                last_sol_id      = None
+                ticks_same       = 0
+                MAX_SAME         = 8   # click next if stuck on same challenge
+
+                # Inner loop: solve all challenges in this session
+                for _ in range(120):   # max 120 challenges per session (safety cap)
                     if not S.running: break
-                    page.wait_for_timeout(500)
-                    if page.locator(_SEL["done"]).count() > 0:
-                        _click(page, _SEL["done"]); page.wait_for_timeout(1500); break
-                    _answer(page)
+
+                    # Check if session is complete
+                    done = page.evaluate(_JS_SESSION_DONE)
+                    if done:
+                        page.wait_for_timeout(800)
+                        page.evaluate(_JS_CLICK_NEXT)
+                        break
+
+                    # Extract challenge data via React fiber
+                    sol = page.evaluate(_JS_FIND_REACT)
+
+                    if sol is None:
+                        # No challenge visible — try clicking next/continue
+                        page.evaluate(_JS_CLICK_NEXT)
+                        page.wait_for_timeout(400)
+                        continue
+
+                    # Detect if we're on the same challenge (stuck)
+                    sol_id = str(sol.get("id", "")) + str(sol.get("type", ""))
+                    if sol_id == last_sol_id:
+                        ticks_same += 1
+                        if ticks_same >= MAX_SAME:
+                            page.evaluate(_JS_CLICK_NEXT)
+                            ticks_same = 0
+                        page.wait_for_timeout(300)
+                        continue
+                    last_sol_id = sol_id
+                    ticks_same  = 0
+
+                    # Solve it
+                    result = page.evaluate(_JS_SOLVE, sol)
+                    challenges_solved += 1
+                    S.calls += 1
+
+                    ctype = _type_label(result)
+                    print(f"\r  {_spin(tick)}  "
+                          f"loop={bold(f'{loop+1}/{loops}')}  "
+                          f"q={bold(str(challenges_solved))}  "
+                          f"type={cyan(ctype):<34}  "
+                          f"{dim(S.elapsed())}     ",
+                          end="", flush=True)
+
                     page.wait_for_timeout(350)
-                    _click(page, _SEL["continue"], 1500)
+                    page.evaluate(_JS_CLICK_NEXT)
+                    page.wait_for_timeout(500)
 
                 completed += 1; S.calls += 1
-                print(f"\r  {_spin(tick)}  "
-                      f"Practice: {bold(f'{completed}/{loops}')}   "
-                      f"errors={yellow(str(S.errors))}   "
-                      f"{dim(S.elapsed())}     ",
-                      end="", flush=True)
+                total_xp_gained += 5  # ~5 XP per practice session minimum
 
             except PWTimeout:
-                S.errors += 1; log(f"\n  Timeout loop {loop+1}", "warning")
+                S.errors += 1
+                log(f"\n  Timeout on loop {loop+1}", "warning")
             except Exception as e:
-                S.errors += 1; log(f"\n  Error loop {loop+1}: {e}", "error"); break
+                S.errors += 1
+                log(f"\n  Error on loop {loop+1}: {e}", "error")
+                if "Target page, context or browser has been closed" in str(e):
+                    break
 
         browser.close()
 
-    print(); S.running = False; _summary("Practice Farm", completed, "sessions")
+    print()
+    S.running = False
+    _summary("Practice Farm", completed, f"sessions  (~{total_xp_gained} XP estimated)")
 
 # ── Account helpers ────────────────────────────────────────────────────────────
 def _acc_label(acc: dict, i: int) -> str:
