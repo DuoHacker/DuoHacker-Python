@@ -1,4 +1,4 @@
-# PyLingo 🦜
+# PyLingo
 
 > **Duolingo XP / Gem / Streak farming tool — pure Python, terminal UI**
 
