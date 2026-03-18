@@ -14,13 +14,12 @@ from typing import Optional
 _REQUIRED = ["requests", "questionary"]
 
 def _ensure_deps():
-    import importlib
+    import importlib.util
     missing = [p for p in _REQUIRED if importlib.util.find_spec(p) is None]
     if missing:
         print(f"\n  Installing: {', '.join(missing)}")
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", *missing],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [sys.executable, "-m", "pip", "install", "--quiet", "--user", *missing],
         )
 
 _ensure_deps()
@@ -541,26 +540,66 @@ def run_mixed(jwt, sub, info, delay_ms):
 
 # ── Practice Farm (Playwright) ─────────────────────────────────────────────────
 def _has_playwright() -> bool:
-    import importlib
+    import importlib.util
     return importlib.util.find_spec("playwright") is not None
 
+def _chromium_installed() -> bool:
+    """Return True only if the Chromium binary actually exists on disk."""
+    try:
+        from playwright.sync_api import sync_playwright
+        import os
+        with sync_playwright() as pw:
+            return os.path.exists(pw.chromium.executable_path)
+    except Exception:
+        return False
+
 def _install_playwright():
-    log("Installing playwright...", "info")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "playwright"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium", "--quiet"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    log("playwright installed.", "success")
+    """Install the playwright package and download the Chromium browser."""
+    log("Installing playwright package...", "info")
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--quiet", "playwright"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    log("Downloading Chromium (this may take a few minutes)...", "info")
+    ret = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"]).returncode
+    if ret != 0:
+        raise RuntimeError("playwright install chromium failed (exit code {ret})")
+    log("Chromium installed.", "success")
+
+def _ensure_playwright() -> bool:
+    """
+    Guarantee both the package AND the browser binary are ready.
+    Returns True if ready to use, False if user declined or install failed.
+    """
+    if not _has_playwright():
+        log("playwright package is not installed.", "warning")
+        if not ask_confirm("  Install playwright now? (~150 MB, one-time setup)", default=True):
+            return False
+        try:
+            _install_playwright()
+        except Exception as e:
+            log(f"Install failed: {e}", "error")
+            return False
+
+    # Package is present — now check the binary
+    if not _chromium_installed():
+        log("playwright is installed but Chromium browser binary is missing.", "warning")
+        log("This happens after a fresh pip install or a playwright update.", "info")
+        if not ask_confirm("  Download Chromium now? (~150 MB, one-time)", default=True):
+            return False
+        log("Running: playwright install chromium...", "info")
+        ret = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"]).returncode
+        if ret != 0:
+            log("Browser download failed. Run manually:  playwright install chromium", "error")
+            return False
+        log("Chromium downloaded successfully.", "success")
+
+    return True
 
 def run_practice(jwt: str, headless: bool = True, loops: int = 10):
-    if not _has_playwright():
-        print()
-        log("playwright is not installed.", "warning")
-        if ask_confirm("  Install playwright now? (~150 MB, one-time setup)", default=True):
-            try:    _install_playwright()
-            except Exception as e: log(f"Install failed: {e}", "error"); return
-        else:
-            return
+    print()
+    if not _ensure_playwright():
+        return
 
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
