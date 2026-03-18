@@ -6,7 +6,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 from __future__ import annotations
-import os, sys, json, time, hashlib, subprocess, re
+import os, sys, json, time, hashlib, subprocess, re, importlib.util
 from pathlib import Path
 from datetime import datetime
 
@@ -166,7 +166,6 @@ def _extract_version(source: str) -> str:
 # ── Bootstrap deps for pylingo ─────────────────────────────────────────────────
 def ensure_pylingo_deps():
     """Install requests + questionary if missing, so pylingo.py can run."""
-    import importlib
     needed = ["requests", "questionary"]
     missing = [p for p in needed if importlib.util.find_spec(p) is None]
     if missing:
