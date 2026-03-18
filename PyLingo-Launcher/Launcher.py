@@ -112,10 +112,6 @@ def check_update(force: bool = False) -> bool:
     meta = load_meta()
     age  = cache_age_s()
 
-    if not force and age < MAX_AGE_S and CACHE_FILE.exists():
-        log(f"Cache is fresh ({int(age)}s old, limit {MAX_AGE_S}s)  —  skipping update check", "info")
-        return False
-
     log("Checking for updates...", "info")
     status, body = fetch_raw(RAW_URL)
 
@@ -171,8 +167,7 @@ def ensure_pylingo_deps():
     if missing:
         log(f"Installing dependencies: {', '.join(missing)}", "info")
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", *missing],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [sys.executable, "-m", "pip", "install", "--quiet", "--user", *missing],
         )
         log("Dependencies installed.", "success")
 
