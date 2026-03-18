@@ -588,114 +588,111 @@ def _ensure_playwright() -> bool:
         log("Chromium downloaded.", "success")
     return True
 
-# ── JavaScript injected into the page to solve challenges ─────────────────────
-# Mirrors handleChallenge() + determineChallengeType() from the userscript.
-# window.sol is populated by Duolingo's React fiber via findReact().
-_JS_FIND_REACT = """
+# ── JavaScript injected into the page — single evaluate, no argument passing ──
+# Playwright wraps every evaluate internally with arguments[0] at CDP level,
+# so passing Python objects as args is unreliable across versions.
+# Solution: find React fiber AND solve in one single JS call — no args needed.
+
+_JS_FIND_AND_SOLVE = """
 (function(){
-  function findReact(dom, up=1){
-    const key = Object.keys(dom).find(k =>
-      k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
-    if(!key) return null;
-    let fiber = dom[key];
-    let n = 0;
-    while(fiber && n < up){ fiber = fiber.return; n++; }
-    while(fiber){
-      if(fiber.memoizedProps?.currentChallenge) return fiber.memoizedProps;
-      fiber = fiber.return;
+  // ── 1. Find currentChallenge via React fiber ──────────────────────────────
+  function findChallenge(){
+    const selectors = [
+      '._3yE3H',
+      '[data-test="challenge"]',
+      '[class*="challenge-node"]'
+    ];
+    for(const sel of selectors){
+      const el = document.querySelector(sel);
+      if(!el) continue;
+      // Walk React fiber tree
+      const fkey = Object.keys(el).find(k =>
+        k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+      if(!fkey) continue;
+      let fiber = el[fkey];
+      for(let i=0; i<30 && fiber; i++){
+        const p = fiber.memoizedProps;
+        if(p && p.currentChallenge) return p.currentChallenge;
+        fiber = fiber.return;
+      }
     }
     return null;
   }
-  const el = document.querySelector('._3yE3H') ||
-             document.querySelector('[data-test="challenge"]') ||
-             document.querySelector('[class*="challenge-"]');
-  if(!el) return null;
-  const props = findReact(el, 1);
-  return props ? props.currentChallenge : null;
-})()
-"""
 
-_JS_SOLVE = """
-(function(sol){
-  if(!sol) return 'no_sol';
-  window.sol = sol;
+  const sol = findChallenge();
+  if(!sol) return JSON.stringify({status:'no_sol'});
+  window.__sol = sol;
 
-  // ── determine type ───────────────────────────────────────────────────────
+  // ── 2. Determine challenge type ───────────────────────────────────────────
   let type = null;
-  if(sol.type==='arrange')                              type='Story Arrange';
-  else if(sol.type==='multiple-choice'||sol.type==='select-phrases') type='Story Multiple Choice';
-  else if(sol.type==='point-to-phrase')                 type='Story Point to Phrase';
-  else if(sol.type==='match'&&sol.pairs)                type='Story Pairs';
-  else if(sol.type==='tapCompleteTable')                type='Tap Complete Table';
-  else if(sol.type==='typeCloze')                       type='Type Cloze';
-  else if(sol.type==='typeClozeTable')                  type='Type Cloze Table';
-  else if(sol.type==='tapClozeTable')                   type='Tap Cloze Table';
-  else if(sol.type==='typeCompleteTable')               type='Type Complete Table';
-  else if(sol.type==='patternTapComplete')              type='Pattern Tap Complete';
-  else if(sol.type==='listenMatch')                     type='Listen Match';
-  else if(sol.type==='listenTap')                       type='Listen Tap';
-  else if(sol.type==='listen')                          type='Listen Challenge';
-  else if(sol.type==='speak')                           type='Challenge Speak';
-  else if(sol.type==='listenSpeak')                     type='Listen Speak';
-  else if(sol.pairs!==undefined)                        type='Pairs';
-  else if(sol.correctTokens!==undefined)               type='Tokens Run';
-  else if(sol.correctIndices!==undefined)              type='Indices Run';
-  else if(sol.articles)                                type='Challenge Name';
+  const t = sol.type || '';
+  if(t==='arrange')                                        type='Story Arrange';
+  else if(t==='multiple-choice'||t==='select-phrases')     type='Story Multiple Choice';
+  else if(t==='point-to-phrase')                           type='Story Point to Phrase';
+  else if(t==='match'&&sol.pairs)                          type='Story Pairs';
+  else if(t==='tapCompleteTable')                          type='Tap Complete Table';
+  else if(t==='typeCloze')                                 type='Type Cloze';
+  else if(t==='typeClozeTable')                            type='Type Cloze Table';
+  else if(t==='tapClozeTable')                             type='Tap Cloze Table';
+  else if(t==='typeCompleteTable')                         type='Type Complete Table';
+  else if(t==='patternTapComplete')                        type='Pattern Tap Complete';
+  else if(t==='listenMatch')                               type='Listen Match';
+  else if(t==='listenTap')                                 type='Listen Tap';
+  else if(t==='listen')                                    type='Listen Challenge';
+  else if(t==='speak')                                     type='Challenge Speak';
+  else if(t==='listenSpeak')                               type='Listen Speak';
+  else if(sol.pairs!==undefined)                           type='Pairs';
+  else if(sol.correctTokens!==undefined)                   type='Tokens Run';
+  else if(sol.correctIndices!==undefined)                  type='Indices Run';
+  else if(sol.articles)                                    type='Challenge Name';
   else if(sol.choices&&sol.correctIndex!==undefined&&!sol.displayTokens) type='Challenge Choice';
-  else if(sol.choices&&sol.correctIndex!==undefined&&sol.displayTokens)  type='Challenge Choice with Text Input';
+  else if(sol.choices&&sol.correctIndex!==undefined)       type='Challenge Choice with Text Input';
   else if(document.querySelector('textarea[data-test="challenge-translate-input"]')) type='Challenge Translate Input';
   else if(document.querySelector('[data-test="challenge-text-input"]'))  type='Challenge Text Input';
   else if(document.querySelector('[data-test*="challenge-partialReverseTranslate"]'))type='Partial Reverse';
-  else if(sol.displayTokens)                           type='Tap Complete';
-  if(!type) return 'unknown_type';
+  else if(sol.displayTokens)                               type='Tap Complete';
+  if(!type) return JSON.stringify({status:'unknown', solType: t});
 
-  // ── skip audio challenges ────────────────────────────────────────────────
+  // ── 3. Skip audio challenges ──────────────────────────────────────────────
   const audioTypes = ['Challenge Speak','Listen Challenge','Listen Match','Listen Tap','Listen Speak'];
   if(audioTypes.includes(type)){
     const skip = document.querySelector('button[data-test="player-skip"]');
-    if(skip&&!skip.disabled) skip.click();
-    return 'skipped:'+type;
+    if(skip && !skip.disabled) skip.click();
+    return JSON.stringify({status:'skipped', type: type});
   }
 
-  // ── solve by type ────────────────────────────────────────────────────────
+  // ── 4. Solve ──────────────────────────────────────────────────────────────
+  function setInput(el, val, proto){
+    const setter = Object.getOwnPropertyDescriptor(proto,'value').set;
+    setter.call(el, val);
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+
   if(type==='Challenge Choice'){
     const choices = document.querySelectorAll("[data-test='challenge-choice']");
-    if(choices.length>0 && sol.correctIndex!==undefined) choices[sol.correctIndex].click();
+    if(choices.length>0 && sol.correctIndex!==undefined)
+      choices[sol.correctIndex].click();
   }
   else if(type==='Challenge Choice with Text Input'){
     const choices = document.querySelectorAll("[data-test='challenge-choice']");
-    if(choices.length>0 && sol.correctIndex!==undefined) choices[sol.correctIndex].click();
-    const elm = document.querySelectorAll('[data-test="challenge-text-input"]')[0];
-    if(elm){
-      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-      setter.call(elm, ans);
-      elm.dispatchEvent(new Event('input',{bubbles:true}));
-    }
+    if(choices.length>0 && sol.correctIndex!==undefined)
+      choices[sol.correctIndex].click();
+    const elm = document.querySelector('[data-test="challenge-text-input"]');
+    if(elm) setInput(elm, sol.correctSolutions?.[0]||'', window.HTMLInputElement.prototype);
   }
   else if(type==='Challenge Translate Input'){
     const elm = document.querySelector('textarea[data-test="challenge-translate-input"]');
-    if(elm){
-      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
-      setter.call(elm, ans);
-      elm.dispatchEvent(new Event('input',{bubbles:true}));
-    }
+    if(elm) setInput(elm, sol.correctSolutions?.[0]||sol.prompt||'', window.HTMLTextAreaElement.prototype);
   }
   else if(type==='Challenge Text Input'){
-    const elm = document.querySelectorAll('[data-test="challenge-text-input"]')[0];
-    if(elm){
-      let ans = sol.correctSolutions?.[0] || sol.prompt || '';
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-      setter.call(elm, ans);
-      elm.dispatchEvent(new Event('input',{bubbles:true}));
-    }
+    const elm = document.querySelector('[data-test="challenge-text-input"]');
+    if(elm) setInput(elm, sol.correctSolutions?.[0]||sol.prompt||'', window.HTMLInputElement.prototype);
   }
   else if(type==='Partial Reverse'){
     const elm = document.querySelector('[data-test*="challenge-partialReverseTranslate"]')
-                      ?.querySelector('span[contenteditable]');
+                       ?.querySelector('span[contenteditable]');
     if(elm){
-      const ans = sol.displayTokens?.filter(t=>t.isBlank)?.map(t=>t.text)?.join('')||'';
+      const ans = (sol.displayTokens||[]).filter(t=>t.isBlank).map(t=>t.text).join('');
       const setter = Object.getOwnPropertyDescriptor(Node.prototype,'textContent').set;
       setter.call(elm, ans);
       elm.dispatchEvent(new Event('input',{bubbles:true}));
@@ -703,21 +700,23 @@ _JS_SOLVE = """
   }
   else if(type==='Pairs'||type==='Story Pairs'){
     const nl = document.querySelectorAll('[data-test*="challenge-tap-token"]:not(span)');
-    sol.pairs?.forEach(pair=>{
+    (sol.pairs||[]).forEach(pair=>{
       for(let i=0;i<nl.length;i++){
-        const txt = nl[i].querySelector('[data-test="challenge-tap-token-text"]')?.innerText?.toLowerCase()?.trim();
-        if((txt===pair.learningToken?.toLowerCase()?.trim()||txt===pair.fromToken?.toLowerCase()?.trim())&&!nl[i].disabled)
-          nl[i].click();
+        const txt = nl[i].querySelector('[data-test="challenge-tap-token-text"]')
+                          ?.innerText?.toLowerCase()?.trim();
+        const a = pair.learningToken?.toLowerCase()?.trim();
+        const b = pair.fromToken?.toLowerCase()?.trim();
+        if((txt===a||txt===b) && !nl[i].disabled) nl[i].click();
       }
     });
   }
   else if(type==='Tap Complete'){
-    // word-bank tap: click tokens in order matching displayTokens blanks
     const bank = document.querySelector('[data-test="word-bank"]');
-    const blanks = sol.displayTokens?.filter(t=>t.isBlank)||[];
-    if(bank&&blanks.length){
+    const blanks = (sol.displayTokens||[]).filter(t=>t.isBlank);
+    if(bank && blanks.length){
       blanks.forEach(blank=>{
-        const btns = Array.from(bank.querySelectorAll('button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
+        const btns = Array.from(bank.querySelectorAll(
+          'button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
         const target = btns.find(b=>b.innerText.trim()===blank.text);
         if(target) target.click();
       });
@@ -726,41 +725,36 @@ _JS_SOLVE = """
   else if(type==='Type Cloze'){
     const input = document.querySelector('input[type="text"].b4jqk');
     if(input){
-      const tok = sol.displayTokens?.find(t=>t.damageStart!==undefined);
+      const tok = (sol.displayTokens||[]).find(t=>t.damageStart!==undefined);
       const ans = tok ? tok.text.slice(tok.damageStart) : '';
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-      setter.call(input, ans);
-      input.dispatchEvent(new Event('input',{bubbles:true}));
+      setInput(input, ans, window.HTMLInputElement.prototype);
       input.dispatchEvent(new Event('change',{bubbles:true}));
     }
   }
   else if(type==='Pattern Tap Complete'){
     const bank = document.querySelector('[data-test="word-bank"],.eSgkc');
     if(bank){
-      const correctText = sol.choices?.[sol.correctIndex??0];
-      const btns = Array.from(bank.querySelectorAll('button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
+      const correctText = (sol.choices||[])[sol.correctIndex||0];
+      const btns = Array.from(bank.querySelectorAll(
+        'button[data-test*="challenge-tap-token"]:not([aria-disabled="true"])'));
       const target = btns.find(b=>b.innerText.trim()===correctText);
       if(target) target.click();
     }
   }
   else if(type==='Challenge Name'){
     const arts = sol.articles||[];
-    const correct = sol.correctSolutions?.[0]||'';
+    const correct = (sol.correctSolutions||[])[0]||'';
     const art = arts.find(a=>correct.startsWith(a));
-    const idx = art!==undefined ? arts.indexOf(art) : 0;
-    const sel = document.querySelector(`[data-test="challenge-choice"]:nth-child(${idx+1})`);
-    if(sel) sel.click();
+    const idx2 = art!==undefined ? arts.indexOf(art) : 0;
+    const sel2 = document.querySelector('[data-test="challenge-choice"]:nth-child('+(idx2+1)+')');
+    if(sel2) sel2.click();
     const remaining = art ? correct.substring(art.length).trim() : correct;
-    const elm = document.querySelector('[data-test="challenge-text-input"]');
-    if(elm){
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-      setter.call(elm, remaining);
-      elm.dispatchEvent(new Event('input',{bubbles:true}));
-    }
+    const elm2 = document.querySelector('[data-test="challenge-text-input"]');
+    if(elm2) setInput(elm2, remaining, window.HTMLInputElement.prototype);
   }
   else if(type==='Story Arrange'){
     const choices = document.querySelectorAll('[data-test*="challenge-tap-token"]:not(span)');
-    sol.phraseOrder?.forEach(i=>{ if(choices[i]) choices[i].click(); });
+    (sol.phraseOrder||[]).forEach(i=>{ if(choices[i]) choices[i].click(); });
   }
   else if(type==='Story Multiple Choice'){
     const choices = document.querySelectorAll('[data-test="stories-choice"]');
@@ -769,15 +763,17 @@ _JS_SOLVE = """
   else if(type==='Story Point to Phrase'){
     const choices = document.querySelectorAll('[data-test="challenge-tap-token-text"]');
     let ci=-1;
-    sol.parts?.forEach((p,i)=>{
-      if(p.selectable){ ci++;
-        if(sol.correctAnswerIndex===i&&choices[ci]) choices[ci].parentElement.click();
+    (sol.parts||[]).forEach((p,i)=>{
+      if(p.selectable){
+        ci++;
+        if(sol.correctAnswerIndex===i && choices[ci])
+          choices[ci].parentElement.click();
       }
     });
   }
 
-  return 'solved:'+type;
-})(arguments[0])
+  return JSON.stringify({status:'solved', type: type});
+})()
 """
 
 _JS_CLICK_NEXT = """
@@ -822,10 +818,21 @@ _CHALLENGE_TYPE_LABELS = {
     "Tap Complete Table":              "tap complete table",
 }
 
-def _type_label(raw: str) -> str:
+def _type_label(res) -> str:
+    if isinstance(res, dict):
+        status = res.get("status", "")
+        t      = res.get("type", "")
+        if status == "solved":
+            return _CHALLENGE_TYPE_LABELS.get(t, t)
+        if status == "skipped":
+            return f"skip  [{t.lower()}]"
+        if status == "no_sol":
+            return "no challenge"
+        return status or "unknown"
+    # fallback for plain string
+    raw = str(res)
     if raw.startswith("solved:"):
-        t = raw[7:]
-        return _CHALLENGE_TYPE_LABELS.get(t, t)
+        return _CHALLENGE_TYPE_LABELS.get(raw[7:], raw[7:])
     if raw.startswith("skipped:"):
         return f"skip  [{raw[8:].lower()}]"
     return raw
@@ -900,17 +907,22 @@ def run_practice(jwt: str, headless: bool = True, loops: int = 10):
                         page.evaluate(_JS_CLICK_NEXT)
                         break
 
-                    # Extract challenge data via React fiber
-                    sol = page.evaluate(_JS_FIND_REACT)
+                    # Find + solve in ONE evaluate call — no argument passing
+                    raw = page.evaluate(_JS_FIND_AND_SOLVE)
+                    try:
+                        res = json.loads(raw) if raw else {"status": "no_sol"}
+                    except Exception:
+                        res = {"status": "parse_error", "raw": str(raw)}
 
-                    if sol is None:
-                        # No challenge visible — try clicking next/continue
+                    status = res.get("status", "")
+
+                    if status == "no_sol":
                         page.evaluate(_JS_CLICK_NEXT)
                         page.wait_for_timeout(400)
                         continue
 
-                    # Detect if we're on the same challenge (stuck)
-                    sol_id = str(sol.get("id", "")) + str(sol.get("type", ""))
+                    # Detect stuck on same challenge
+                    sol_id = status + res.get("type", "")
                     if sol_id == last_sol_id:
                         ticks_same += 1
                         if ticks_same >= MAX_SAME:
@@ -921,12 +933,10 @@ def run_practice(jwt: str, headless: bool = True, loops: int = 10):
                     last_sol_id = sol_id
                     ticks_same  = 0
 
-                    # Solve it
-                    result = page.evaluate(_JS_SOLVE, sol)
                     challenges_solved += 1
                     S.calls += 1
-
-                    ctype = _type_label(result)
+                    result = res
+                    ctype = _type_label(res)
                     print(f"\r  {_spin(tick)}  "
                           f"loop={bold(f'{loop+1}/{loops}')}  "
                           f"q={bold(str(challenges_solved))}  "
