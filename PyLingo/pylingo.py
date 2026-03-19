@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-# ═══════════════════════════════════════════════════════════════════
-# PyLingo — Duolingo XP / Gem / Streak Farming Tool
-# Pure Python stdlib only · Terminal UI with ANSI
-# ═══════════════════════════════════════════════════════════════════
-
 import os, sys, json, time, base64, threading, http.client, urllib.parse
 import signal, math, random, re
 from datetime import datetime, timezone
 
-VERSION ="1.0.0"
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+from rich import box as rbox
+
+_con = Console(highlight=False)
+_print_raw = print
+print = _con.print
+
+VERSION = "1.0.0"
+
 BANNER_ART = r"""
   ██████╗ ██╗   ██╗██╗     ██╗███╗   ██╗  ██████╗  ██████╗
   ██╔══██╗╚██╗ ██╔╝██║     ██║████╗  ██║ ██╔════╝ ██╔═══██╗
@@ -18,81 +23,51 @@ BANNER_ART = r"""
   ╚═╝        ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝
 """
 
-# ─── ANSI color helpers ───────────────────────────────────────────
-R ="\033[0m"
-B ="\033[1m"
-DIM="\033[2m"
-
-def c(text, code): return f"\033[{code}m{text}{R}"
-def green(t): return c(t,"92")
-def yellow(t): return c(t,"93")
-def red(t): return c(t,"91")
-def blue(t): return c(t,"94")
-def cyan(t): return c(t,"96")
-def magenta(t): return c(t,"95")
-def bold(t): return c(t,"1")
-def dim(t): return c(t,"2")
-def white(t): return c(t,"97")
-
 def cls():
-    os.system("cls" if os.name =="nt" else"clear")
+    os.system("cls" if os.name == "nt" else "clear")
+
+def _plain(text):
+    return re.sub(r'\033\[[0-9;]*m', '', text)
 
 def term_width():
-    try:
-        return os.get_terminal_size().columns
-    except:
-        return 80
+    try:    return os.get_terminal_size().columns
+    except: return 100
 
-def hr(char="─", color="94"):
-    w = term_width()
-    return c(char * w, color)
-
-def center(text, fill=""):
-    w = term_width()
-    plain = re.sub(r'\033\[[0-9;]*m','', text)
-    pad = max(0, (w - len(plain)) // 2)
-    return fill * pad + text
-
-def box(lines, title="", color="94", width=None):
-    w = width or min(term_width() - 2, 72)
-    tl,tr,bl,br ="╭","╮","╰","╯"
-    h,v ="─","│"
-    out = []
-    if title:
-        t = f" {title}"
-        inner = w - 2
-        left = (inner - len(re.sub(r'\033\[[0-9;]*m','',t))) // 2
-        right = inner - left - len(re.sub(r'\033\[[0-9;]*m','',t))
-        out.append(c(tl + h*left, color) + bold(t) + c(h*right + tr, color))
-    else:
-        out.append(c(tl + h*(w-2) + tr, color))
-    for line in lines:
-        plain_len = len(re.sub(r'\033\[[0-9;]*m','',line))
-        pad = w - 2 - plain_len
-        out.append(c(v,color) +"" + line +"" * max(0,pad-1) + c(v,color))
-    out.append(c(bl + h*(w-2) + br, color))
-    return"\n".join(out)
-
-# ─── Logging ──────────────────────────────────────────────────────
 _log_lock = threading.Lock()
 
 def log(msg, level="info"):
     ts = datetime.now().strftime("%H:%M:%S")
-    icons = {"info":"ℹ","success":"","warning":"","error":"","farm":"","stat":"◈"}
-    colors= {"info":cyan,"success":green,"warning":yellow,"error":red,"farm":magenta,"stat":blue}
-    icon = icons.get(level,"·")
-    color = colors.get(level, white)
+    cfg = {
+        "info":    ("dim",          "·"),
+        "success": ("bright_green", "✓"),
+        "warning": ("yellow",       "!"),
+        "error":   ("bright_red",   "✗"),
+        "farm":    ("cyan",         "◆"),
+        "stat":    ("steel_blue1",  "▸"),
+    }
+    color, icon = cfg.get(level, ("white", "·"))
     with _log_lock:
-        print(f" {dim(ts)} {color(icon)} {msg}")
+        print(f"  [dim]{ts}[/]  [{color}]{icon}[/]  {msg}")
 
 def log_stat(label, value, unit=""):
-    print(f" {dim('·')} {dim(label+':')} {bold(str(value))}{dim(''+unit) if unit else''}")
+    u = f" [dim]{unit}[/]" if unit else ""
+    print(f"  [dim]│[/] [dim]{label}:[/]  [bold]{value}[/]{u}")
 
+def farm_progress(label, color, endless=False):
+    cols = [
+        SpinnerColumn(spinner_name="dots", style=f"bold {color}"),
+        TextColumn(f"[bold {color}]{label}[/]"),
+        BarColumn(bar_width=32, style=color, complete_style=f"bold {color}"),
+        TextColumn("[bold white]{task.completed:,}[/]" + ("" if endless else f"[dim] / {{task.total:,}}[/]")),
+        TimeElapsedColumn(),
+    ]
+    return Progress(*cols, console=_con, transient=False)
 
-# ─── Numbered menu (no curses) ───────────────────────────────────
+def title_bar():
+    ts = datetime.now().strftime("%H:%M")
+    print(f"\n  [bold bright_white]Py[/][bold cyan]Lingo[/]  [dim]{VERSION}[/]  [dim]·[/]  [dim]{ts}[/]")
 
 def arrow_menu(title, options, subtitle=""):
-    """Numbered prompt menu. Returns selected index or -1 on 0/q/ESC."""
     items = []
     for o in options:
         if isinstance(o, (list, tuple)) and len(o) >= 2:
@@ -101,19 +76,36 @@ def arrow_menu(title, options, subtitle=""):
             items.append((str(o), ""))
 
     cls()
-    lines = []
+    title_bar()
+    print()
+
     if subtitle:
-        lines.append(dim(subtitle))
-        lines.append("")
+        print(f"  [dim]{subtitle}[/]")
+        print()
+
+    KEY_COLORS = [
+        "bright_yellow", "bright_cyan", "sandy_brown",
+        "medium_purple1", "bright_green", "pink1",
+        "steel_blue1",    "bright_white",
+    ]
+
     for i, (label, desc) in enumerate(items):
-        suffix = f"  {dim(desc)}" if desc else ""
-        lines.append(f"  {bold(str(i+1)+'.')} {label}{suffix}")
-    lines.append(f"  {bold('0.')} {dim('Back')}")
-    print(box(lines, title=title, color="94"))
+        key_color = KEY_COLORS[i % len(KEY_COLORS)]
+        num = str(i + 1)
+        is_last = (i == len(items) - 1)
+        if is_last:
+            line = f"  [dim]{num}. {label}[/]"
+        else:
+            desc_part = f"  [dim]{desc}[/]" if desc else ""
+            line = f"  [{key_color}]{num}.[/] [bold white]{label}[/]{desc_part}"
+        print(line)
+        if i == len(items) - 2:
+            print()
+
     print()
     try:
-        v = input(f"  {cyan('Select:')} ").strip()
-        if v == '0' or v.lower() in ('q', 'esc', ''):
+        v = _con.input("  [dim]>[/] ").strip()
+        if v in ('0', 'q', 'Q', ''):
             return -1
         if v.isdigit():
             idx = int(v) - 1
@@ -122,6 +114,38 @@ def arrow_menu(title, options, subtitle=""):
         return -1
     except (ValueError, KeyboardInterrupt):
         return -1
+
+def box(lines, title="", color="cyan", width=None):
+    from rich.panel import Panel
+    from rich.text import Text
+    body = "\n".join(lines)
+    _con.print(Panel(body, title=f"[bold {color}]{title}[/]" if title else None, border_style=color, padding=(0, 1)))
+
+def hr(char="─", color="dim"):
+    print(f"[{color}]{char * min(term_width(), 72)}[/]")
+
+def center(text, fill=" "):
+    return text
+
+# ─── ANSI compat shims (for legacy call sites) ───────────────────
+def _r(t, code): return f"\033[{code}m{t}\033[0m"
+def green(t):    return f"[bright_green]{t}[/]"
+def yellow(t):   return f"[yellow]{t}[/]"
+def red(t):      return f"[bright_red]{t}[/]"
+def blue(t):     return f"[steel_blue1]{t}[/]"
+def cyan(t):     return f"[cyan]{t}[/]"
+def magenta(t):  return f"[medium_purple1]{t}[/]"
+def bold(t):     return f"[bold]{t}[/]"
+def dim(t):      return f"[dim]{t}[/]"
+def white(t):    return f"[white]{t}[/]"
+def _green_bold(t): return f"[bold bright_green]{t}[/]"
+def _cyan_bold(t):  return f"[bold cyan]{t}[/]"
+def _plain(t):
+    import re
+    return re.sub(r"\033\[[0-9;]*m", "", re.sub(r"\[/?[a-z_ 0-9]*\]", "", str(t)))
+def _rpad(text, width):
+    pad = width - len(_plain(str(text)))
+    return str(text) + " " * max(0, pad)
 
 # ─── HTTP helper (stdlib only) ────────────────────────────────────
 USER_AGENTS = [
@@ -145,22 +169,29 @@ def make_headers(jwt, sub=None):
         "Origin":"https://www.duolingo.com",
         "Referer":"https://www.duolingo.com/",
         "Host":"www.duolingo.com",
-        "Accept-Encoding":"gzip, deflate, br",
+        "Accept-Encoding":"identity",
     }
 
 def http_request(method, host, path, headers=None, body=None, use_ssl=True, timeout=30):
-    """Pure stdlib HTTP request. Returns (status_code, response_text)."""
+    import gzip as _gzip, zlib as _zlib
     try:
         conn_cls = http.client.HTTPSConnection if use_ssl else http.client.HTTPConnection
         conn = conn_cls(host, timeout=timeout)
         body_bytes = json.dumps(body).encode() if body else None
         conn.request(method, path, body=body_bytes, headers=headers or {})
         resp = conn.getresponse()
-        # Read raw — handle gzip gracefully
         raw = resp.read()
+        enc = resp.getheader("Content-Encoding", "")
+        try:
+            if "gzip" in enc:
+                raw = _gzip.decompress(raw)
+            elif "deflate" in enc:
+                raw = _zlib.decompress(raw)
+        except Exception:
+            pass
         try:
             text = raw.decode("utf-8")
-        except:
+        except Exception:
             text = raw.decode("latin-1")
         return resp.status, text
     except Exception as e:
@@ -204,7 +235,8 @@ def decode_jwt(token):
         raise ValueError(f"Cannot decode JWT: {e}")
 
 def jwt_sub(token):
-    return decode_jwt(token).get("sub")
+    v = decode_jwt(token).get("sub")
+    return str(v) if v is not None else None
 
 def jwt_expired(token):
     try:
@@ -224,6 +256,31 @@ def jwt_expires_at(token):
     except:
         return"unknown"
 
+# ─── Config ───────────────────────────────────────────────────────
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+
+_DEFAULT_CONFIG = {
+    "delay_ms":    1500,
+    "debug":       False,
+    "gem_batch":   3,
+}
+
+def load_config() -> dict:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                data = json.load(f)
+                return {**_DEFAULT_CONFIG, **data}
+        except Exception:
+            pass
+    return dict(_DEFAULT_CONFIG)
+
+def save_config(cfg: dict):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+CFG = load_config()
+
 # ─── Account store (accounts.json) ───────────────────────────────
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__),"accounts.json")
 
@@ -242,11 +299,10 @@ def save_accounts(accounts):
 
 # ─── Duolingo API ─────────────────────────────────────────────────
 FIELDS = (
-    "id,username,fromLanguage,learningLanguage,streak,totalXp,gems,lingots,"
-    "creationDate,streakData,trackingProperties,"
-    "currentCourse{pathSectioned{units{levels{"
-    "pathLevelMetadata{skillId},pathLevelClientData{skillId}"
-    "}}}}"
+    "id,username,fromLanguage,learningLanguage,streak,totalXp,level,"
+    "numFollowers,numFollowing,gems,creationDate,streakData,picture,"
+    "hasPlus,trackingProperties,"
+    "currentCourse{pathSectioned{units{levels{pathLevelMetadata{skillId}}}}}"
 )
 
 def get_user_info(jwt, sub):
@@ -258,12 +314,19 @@ def get_user_info(jwt, sub):
         raise PermissionError("JWT rejected by Duolingo (403) — token may be expired or revoked")
     if status != 200:
         raise ConnectionError(f"Failed to fetch user info (HTTP {status})")
-    # Normalize creation date
-    tp = data.get("trackingProperties", {})
+    if not data or not isinstance(data, dict):
+        raise ConnectionError("Duolingo returned empty response")
+    tp = data.get("trackingProperties") or {}
     if tp.get("creation_date_new"):
         data["creationDate"] = tp["creation_date_new"]
     elif isinstance(data.get("creationDate"), (int, float)):
-        data["creationDate"] = datetime.fromtimestamp(data["creationDate"]/1000).isoformat()
+        data["creationDate"] = datetime.fromtimestamp(data["creationDate"] / 1000).isoformat()
+    if not data.get("username"):
+        data["username"] = (
+            tp.get("username")
+            or tp.get("user_id")
+            or str(data.get("id") or sub)
+        )
     return data
 
 def extract_skill_id(current_course):
@@ -436,7 +499,7 @@ def farm_xp(jwt, sub, user_info, delay_ms, use_stories=True):
     tick = 0
 
     print()
-    log(f"Starting XP farm — {bold('Stories 499 XP')} mode (auto-fallback to 110 XP)","farm")
+    log(f"Starting XP farm — [bold]Stories 499 XP[/bold] mode (auto-fallback to 110 XP)","farm")
     log(f"Delay: {delay_ms}ms | Skill ID: {green(skill_id) if skill_id else red('none')}","info")
     print()
 
@@ -541,16 +604,15 @@ def _farm_summary(mode, total, unit):
     calls = state.calls
     errs = state.errors
     print("\n")
-    print(box([
-        f" {bold('Farm complete!')}",
+    box([
+        f" [bold]Farm complete![/bold]",
         f" Mode : {bold(mode)}",
         f" Total : {green(str(total))} {unit}",
         f" Calls : {blue(str(calls))}",
         f" Errors : {yellow(str(errs))}",
         f" Runtime : {cyan(elapsed)}",
-    ], title=" Session Summary", color="92"))
+    ], title=" Session Summary", color="bright_green")
     print()
-
 
 # ─── Streak Farm ─────────────────────────────────────────────────
 # Source: farmStreakSafe / farmStreakNormal from DuoHacker userscript
@@ -602,7 +664,6 @@ def _streak_session_once(jwt, sub, user_info, start_ts, end_ts):
     status2, _ = duo_put(f"/2023-05-23/sessions/{session['id']}", jwt, sub, update_body)
     return status2 == 200
 
-
 def farm_streak_safe(jwt, sub, user_info, delay_ms):
     """Farm streak up to account age limit — safe mode.
     Mirrors farmStreakSafe from DuoHacker userscript."""
@@ -639,13 +700,13 @@ def farm_streak_safe(jwt, sub, user_info, delay_ms):
         return
 
     to_farm = max_safe - current_streak
-    print(box([
+    box([
         f" Will farm {bold(green(str(to_farm)))} streak days",
         f" {current_streak} → {max_safe}",
-        f" {dim('Ctrl+C to stop anytime')}",
-    ], title=" Safe Streak Farm", color="92"))
+        f" [dim]Ctrl+C to stop anytime[/dim]",
+    ], title=" Safe Streak Farm", color="bright_green")
     print()
-    if input(f" {yellow('Confirm? (y/N):')}").strip().lower() !="y":
+    if _con.input(f" [yellow]Confirm? (y/N):[/yellow]").strip().lower() !="y":
         log("Cancelled.","info")
         return
 
@@ -681,13 +742,12 @@ def farm_streak_safe(jwt, sub, user_info, delay_ms):
     print()
     _farm_summary("Streak (Safe)", state.streak_farmed," days")
 
-
 def farm_streak_normal(jwt, sub, user_info, delay_ms):
     """Farm streak backwards from current streak start — normal mode (higher risk).
     Mirrors farmStreakNormal from DuoHacker userscript."""
     print()
-    log(f"{red('WARNING:')} Normal mode has higher ban risk!","warning")
-    if input(f" {yellow('Confirm? (y/N):')}").strip().lower() !="y":
+    log(f"[bright_red]WARNING:[/bright_red] Normal mode has higher ban risk!","warning")
+    if _con.input(f" [yellow]Confirm? (y/N):[/yellow]").strip().lower() !="y":
         log("Cancelled.","info")
         return
 
@@ -770,8 +830,6 @@ def farm_mixed(jwt, sub, user_info, delay_ms):
     print()
     state.running = False
     _farm_summary("Mixed (XP+Gems)", f"{state.xp_earned} XP | {state.gem_earned} Gems","")
-
-
 
 # ─── Auto Daily Quest ─────────────────────────────────────────────
 # Source: runAutoCompleteQuests / bruteForceQuests from DuoHacker userscript
@@ -878,7 +936,6 @@ def auto_daily_quest(jwt, sub, user_info):
         log("Quest batch failed — you may need to complete some manually.","warning")
     return ok
 
-
 # ─── Auto League ──────────────────────────────────────────────────
 # Source: farmLeague from DuoHacker userscript
 # Fetches leaderboard, farms XP until Rank 1 gap > 1000 XP
@@ -934,7 +991,7 @@ def farm_league(jwt, sub, user_info, delay_ms):
                 log(f" Rank 1 secured! Gap: {gap} XP — stopping.","success")
                 break
             else:
-                print(f"\r {spinner_char(tick)} Rank: {bold('1')}"
+                print(f"\r {spinner_char(tick)} Rank: [bold]1[/bold]"
                       f"Gap above #2: {yellow(str(gap))} XP"
                       f"Score: {blue(str(my_score))}"
                       f"Time: {dim(state.elapsed())}", end="", flush=True)
@@ -959,7 +1016,6 @@ def farm_league(jwt, sub, user_info, delay_ms):
     print()
     state.running = False
     _farm_summary("Auto League", state.xp_earned,"XP")
-
 
 # ─── Shop Items ───────────────────────────────────────────────────
 # Source: getShopItems / buyItem / categorizeItems from DuoHacker userscript
@@ -1134,11 +1190,11 @@ def shop_items_menu(acc):
         # Show first 800 chars of raw response
         preview = text[:800].replace("\n","")
         print(f"\n {dim(preview)}\n")
-        input(f" {dim('Press Enter to continue anyway...')}")
+        _con.input(f" [dim]Press Enter to continue anyway...[/dim]")
 
     if not items:
         log("No shop items available.","warning")
-        input(f"\n {dim('Press Enter...')}")
+        _con.input(f"\n [dim]Press Enter...[/dim]")
         return
 
     # Group by category
@@ -1151,11 +1207,11 @@ def shop_items_menu(acc):
     while True:
         cls()
         account_name = user_info.get("username", sub)
-        print(box([
+        box([
             f" Account : {bold(green(account_name))}",
             f" Gems : {bold(cyan(str(user_info.get('gems','?'))))}",
-            f" {dim('Items are acquired free (isFree=True) — no gems deducted')}",
-        ], title=" Shop Items", color="93"))
+            f" [dim]Items are acquired free (isFree=True) — no gems deducted[/dim]",
+        ], title=" Shop Items", color="yellow")
         print()
 
         # List all items with numbering
@@ -1174,10 +1230,10 @@ def shop_items_menu(acc):
                 idx += 1
 
         print()
-        print(f" {bold('a.')} {green('Buy ALL items')}")
-        print(f" {bold('0.')} {dim('← Back')}")
+        print(f" [bold]a.[/bold] [bright_green]Buy ALL items[/bright_green]")
+        print(f" [bold]0.[/bold] [dim]← Back[/dim]")
         print()
-        choice = input(f" {cyan('Item # or (a)ll or 0:')}").strip().lower()
+        choice = _con.input(f" [cyan]Item # or (a)ll or 0:[/cyan]").strip().lower()
 
         if choice =="0":
             return
@@ -1195,7 +1251,7 @@ def shop_items_menu(acc):
                     log(f" {name}","error"); fail += 1
                 time.sleep(0.5)
             log(f"Done — {ok} success, {fail} failed","success" if fail == 0 else"warning")
-            input(f"\n {dim('Press Enter...')}")
+            _con.input(f"\n [dim]Press Enter...[/dim]")
         else:
             try:
                 item_idx = int(choice) - 1
@@ -1209,7 +1265,7 @@ def shop_items_menu(acc):
                         log(f" {name} acquired!","success")
                     else:
                         log(f" Failed to acquire {name}.","error")
-                    input(f"\n {dim('Press Enter...')}")
+                    _con.input(f"\n [dim]Press Enter...[/dim]")
                 else:
                     log("Invalid selection.","error")
             except ValueError:
@@ -1558,7 +1614,7 @@ def _gen_worker(result, delay_ms, tid, farm_stories=True, story_count=10):
             result.failed += 1
             result.done += 1
         with _gen_lock:
-            print(f"\n {red('')} Thread-{tid}: {dim(str(e))}")
+            print(f"\n [bright_red][/bright_red] Thread-{tid}: {dim(str(e))}")
     if delay_ms > 0:
         time.sleep(delay_ms / 1000)
 
@@ -1577,69 +1633,69 @@ def _save_generated(accs):
 # ── Menu ──────────────────────────────────────────────────────────
 def generate_accounts_menu():
     cls()
-    print(box([
+    box([
         " Auto-generate Duolingo accounts.",
-        f" {dim('Flow: guest → batch claim → lesson → stories XP')}",
-        f" {dim('No API key needed — results saved to generated_accounts.json')}",
+        f" [dim]Flow: guest → batch claim → lesson → stories XP[/dim]",
+        f" [dim]No API key needed — results saved to generated_accounts.json[/dim]",
         "",
-        f" {yellow('Based on DuoXPy Dex CLI source')}",
-    ], title=" Generate Account", color="95"))
+        f" [yellow]Based on DuoXPy Dex CLI source[/yellow]",
+    ], title=" Generate Account", color="medium_purple1")
     print()
 
     # count
     try:
-        v = input(f" {cyan('How many accounts? [default=1]:')}").strip()
+        v = _con.input(f" [cyan]How many accounts? [default=1]:[/cyan]").strip()
         count = int(v) if v else 1
         if count < 1 or count > 500:
             log("Count must be 1–500.","error")
-            input(f"\n {dim('Press Enter...')}")
+            _con.input(f"\n [dim]Press Enter...[/dim]")
             return
     except ValueError:
         log("Invalid number.","error")
-        input(f"\n {dim('Press Enter...')}")
+        _con.input(f"\n [dim]Press Enter...[/dim]")
         return
 
     # threads
     try:
-        v = input(f" {cyan('Threads (parallel, 1–10) [default=1]:')}").strip()
+        v = _con.input(f" [cyan]Threads (parallel, 1–10) [default=1]:[/cyan]").strip()
         threads = max(1, min(10, int(v) if v else 1))
     except ValueError:
         threads = 1
 
     # delay
     try:
-        v = input(f" {cyan('Delay per thread (ms) [default=2000]:')}").strip()
+        v = _con.input(f" [cyan]Delay per thread (ms) [default=2000]:[/cyan]").strip()
         delay_ms = max(0, int(v) if v else 2000)
     except ValueError:
         delay_ms = 2000
 
     # farm stories option
     farm_stories = True
-    v = input(f" {cyan('Farm stories XP after creation? (Y/n) [default=Y]:')}").strip().lower()
+    v = _con.input(f" [cyan]Farm stories XP after creation? (Y/n) [default=Y]:[/cyan]").strip().lower()
     if v =="n":
         farm_stories = False
 
     story_count = 10
     if farm_stories:
         try:
-            v = input(f" {cyan('Story runs per account [default=10]:')}").strip()
+            v = _con.input(f" [cyan]Story runs per account [default=10]:[/cyan]").strip()
             story_count = max(1, min(50, int(v) if v else 10))
         except ValueError:
             story_count = 10
 
     print()
-    print(box([
+    box([
         f" Accounts : {bold(green(str(count)))}",
         f" Threads : {bold(cyan(str(threads)))}",
         f" Delay : {bold(yellow(str(delay_ms)))} ms / thread",
         f" Farm stories : {bold(green('Yes') if farm_stories else dim('No'))}",
         f" Story runs : {bold(str(story_count)) if farm_stories else dim('—')}",
-        f" Output : {dim('generated_accounts.json')}",
-    ], title=" Config", color="96"))
+        f" Output : [dim]generated_accounts.json[/dim]",
+    ], title=" Config", color="cyan")
     print()
-    if input(f" {yellow('Start? (y/N):')}").strip().lower() !="y":
+    if _con.input(f" [yellow]Start? (y/N):[/yellow]").strip().lower() !="y":
         log("Cancelled.","info")
-        input(f"\n {dim('Press Enter...')}")
+        _con.input(f"\n [dim]Press Enter...[/dim]")
         return
 
     # run
@@ -1706,20 +1762,20 @@ def generate_accounts_menu():
         _save_generated(final_ok)
 
     elapsed_total = time.time() - start_ts
-    print(box([
-        f" {bold('Done!')}",
+    box([
+        f" [bold]Done![/bold]",
         f" Requested : {bold(str(count))}",
-        f" {green('')} Success : {bold(green(str(len(final_ok))))}",
-        f" {red('')} Failed : {(red(str(final_fail))) if final_fail else dim('0')}",
+        f" [bright_green][/bright_green] Success : {bold(green(str(len(final_ok))))}",
+        f" [bright_red][/bright_red] Failed : {(red(str(final_fail))) if final_fail else dim('0')}",
         f" Runtime : {cyan(f'{elapsed_total:.1f}s')}",
         f" Saved to : {dim(GENERATED_FILE)}",
-    ], title=" Summary", color="92"))
+    ], title=" Summary", color="bright_green")
     print()
 
-    if final_ok and input(f" {cyan('Show accounts? (y/N):')}").strip().lower() =="y":
+    if final_ok and _con.input(f" [cyan]Show accounts? (y/N):[/cyan]").strip().lower() =="y":
         print()
         for i, a in enumerate(final_ok, 1):
-            print(box([
+            box([
                 f" {bold(f'#{i}')}",
                 f" User ID : {dim(str(a['_id']))}",
                 f" Username : {green(a['username'])}",
@@ -1727,82 +1783,100 @@ def generate_accounts_menu():
                 f" Password : {yellow(a['password'])}",
                 f" XP : {blue(str(a.get('xp',0)))}",
                 f" JWT : {dim(a['jwt'][:48] +'...')}",
-            ], title=f"Account {i}", color="95", width=70))
+            ], title=f"Account {i}", color="medium_purple1", width=70)
             print()
 
-    input(f" {dim('Press Enter to continue...')}")
-
+    _con.input(f" [dim]Press Enter to continue...[/dim]")
 
 # ─── Account management ───────────────────────────────────────────
 def add_account():
+    import traceback
     cls()
-    print(box([
+    box([
         " Paste your Duolingo JWT token below.",
-        f" {dim('Get it from browser console:')}",
-        f" {yellow('document.cookie.match(/jwt_token=([^;]+)/)[1]')}",
-    ], title=" Add Account", color="94"))
+        " [dim]Get it from browser console:[/dim]",
+        " [yellow]document.cookie.match(/jwt_token=([^;]+)/)[1][/yellow]",
+    ], title=" Add Account", color="steel_blue1")
     print()
-    jwt = input(f" {cyan('JWT Token:')}").strip().strip("'\"")
-    if not jwt:
-        log("No token entered.","warning")
+    jwt_raw = _con.input(" [cyan]JWT Token:[/cyan] ").strip().strip("'\"")
+    if not jwt_raw:
+        log("No token entered.", "warning")
+        _con.input("\n [dim]Press Enter...[/dim] ")
         return
 
-    if jwt_expired(jwt):
-        log("This JWT token is already expired!","error")
+    if jwt_expired(jwt_raw):
+        log("This JWT token is already expired!", "error")
+        _con.input("\n [dim]Press Enter...[/dim] ")
         return
 
     try:
-        sub = jwt_sub(jwt)
+        sub = jwt_sub(jwt_raw)
     except ValueError as e:
-        log(str(e),"error")
+        log(f"Invalid token format: {e}", "error")
+        _con.input("\n [dim]Press Enter...[/dim] ")
         return
 
     if not sub:
-        log("Cannot extract user ID from token.","error")
+        log("Cannot extract user ID from token.", "error")
+        _con.input("\n [dim]Press Enter...[/dim] ")
         return
 
-    log("Fetching account info...","info")
+    log(f"Fetching info for sub [bold]{sub}[/bold]...", "info")
     try:
-        info = get_user_info(jwt, sub)
+        info = get_user_info(jwt_raw, sub)
     except Exception as e:
-        log(str(e),"error")
+        log(f"Failed to fetch account info: {e}", "error")
+        print(f"\n[dim]{traceback.format_exc()}[/dim]")
+        _con.input("\n [dim]Press Enter...[/dim] ")
         return
+
+    if not info.get("username"):
+        info["username"] = str(sub)
 
     accounts = load_accounts()
-    # Check duplicate
     for acc in accounts:
         if acc.get("sub") == str(sub):
-            acc["jwt"] = jwt
+            acc["jwt"] = jwt_raw
             acc["info"] = info
             save_accounts(accounts)
-            log(f"Updated account: {bold(green(info.get('username','?')))}","success")
+            log(f"Updated: [bold bright_green]{info['username']}[/bold bright_green]", "success")
+            _con.input("\n [dim]Press Enter...[/dim] ")
             return
 
-    accounts.append({"sub": str(sub),"jwt": jwt,"info": info,"added": datetime.now().isoformat()})
+    accounts.append({"sub": str(sub), "jwt": jwt_raw, "info": info, "added": datetime.now().isoformat()})
     save_accounts(accounts)
     print()
-    log(f"Account added: {bold(green(info.get('username','?')))}","success")
-    log(f"Streak: {yellow(str(info.get('streak',0)))} | XP: {blue(str(info.get('totalXp',0)))} | Gems: {cyan(str(info.get('gems',0)))}","stat")
-    log(f"Token expires: {dim(jwt_expires_at(jwt))}","info")
-    input(f"\n {dim('Press Enter to continue...')}")
+    log(f"Account added: [bold bright_green]{info['username']}[/bold bright_green]", "success")
+    log(f"Streak [yellow]{info.get('streak',0)}[/yellow]  XP [steel_blue1]{info.get('totalXp',0)}[/steel_blue1]  Gems [cyan]{info.get('gems',0)}[/cyan]", "stat")
+    log(f"Token expires: [dim]{jwt_expires_at(jwt_raw)}[/dim]", "info")
+    _con.input("\n [dim]Press Enter...[/dim] ")
 
 def list_accounts():
     accounts = load_accounts()
     if not accounts:
-        log("No accounts saved. Use'Add Account' to add one.","warning")
+        log("No accounts saved. Use 'Add Account' to add one.", "warning")
         return
-    print()
+    t = Table(box=rbox.SIMPLE, show_header=True, header_style="dim", padding=(0, 1))
+    t.add_column("#",       style="dim",           width=3)
+    t.add_column("username",style="bold white",     min_width=16)
+    t.add_column("streak",  style="yellow",         width=8)
+    t.add_column("xp",      style="steel_blue1",    width=10)
+    t.add_column("gems",    style="cyan",           width=8)
+    t.add_column("status",  width=8)
     for i, acc in enumerate(accounts, 1):
-        info = acc.get("info", {})
-        exp = jwt_expired(acc.get("jwt",""))
-        status_icon = red(" expired") if exp else green(" active")
-        print(f" {bold(str(i))}. {bold(green(info.get('username','?')))}")
-        print(f" {dim('ID:')} {acc.get('sub','?')} │ {status_icon}")
-        print(f" {yellow(str(info.get('streak',0)))} streak"
-              f"│ {blue(str(info.get('totalXp',0)))} XP"
-              f"│ {cyan(str(info.get('gems',0)))} gems")
-        print(f" {dim('Expires:')} {dim(jwt_expires_at(acc.get('jwt','')))}")
-        print()
+        info   = acc.get("info", {})
+        exp    = jwt_expired(acc.get("jwt",""))
+        status = "[bright_red]expired[/]" if exp else "[bright_green]active[/]"
+        t.add_row(
+            str(i),
+            info.get("username","?"),
+            str(info.get("streak", 0)),
+            f"{info.get('totalXp', 0):,}",
+            str(info.get("gems", 0)),
+            status,
+        )
+    print()
+    _con.print(t)
 
 def remove_account():
     accounts = load_accounts()
@@ -1811,7 +1885,7 @@ def remove_account():
         return
     list_accounts()
     try:
-        idx = int(input(f" {cyan('Account number to remove:')}")) - 1
+        idx = int(_con.input(f" [cyan]Account number to remove:[/cyan]")) - 1
         removed = accounts.pop(idx)
         save_accounts(accounts)
         log(f"Removed: {bold(removed.get('info',{}).get('username','?'))}","success")
@@ -1845,7 +1919,7 @@ def select_account():
     print()
     list_accounts()
     try:
-        idx = int(input(f" {cyan('Select account:')}")) - 1
+        idx = int(_con.input(f" [cyan]Select account:[/cyan]")) - 1
         return accounts[idx]
     except (ValueError, IndexError):
         log("Invalid selection.","error")
@@ -1853,47 +1927,105 @@ def select_account():
 
 # ─── Info / Status ────────────────────────────────────────────────
 def show_account_info(acc):
-    info = acc.get("info", {})
-    jwt = acc.get("jwt","")
+    info     = acc.get("info", {})
+    jwt      = acc.get("jwt","")
     cls()
-    exp = jwt_expired(jwt)
+    exp      = jwt_expired(jwt)
     username = info.get("username","?")
-    lines = [
-        f" {bold(green(username))}",
-        f" {dim('ID:')} {acc.get('sub','?')}",
-        "",
-        f" Streak : {bold(yellow(str(info.get('streak',0))))} days",
-        f" Total XP: {bold(blue(str(info.get('totalXp',0))))}",
-        f" Gems : {bold(cyan(str(info.get('gems',0))))}",
-        f" Learning: {info.get('fromLanguage','?')} → {info.get('learningLanguage','?')}",
-        "",
-        f" Token : {red('EXPIRED') if exp else green('valid')}",
-        f" ⏳ Expires : {dim(jwt_expires_at(jwt))}",
-        f" Account : {dim(str(info.get('creationDate','?'))[:10])}",
-    ]
-    print(box(lines, title=f" {username}", color="94", width=60))
+    streak   = info.get('streak', 0)
+    xp       = info.get('totalXp', 0)
+    gems     = info.get('gems', 0)
+    fl       = info.get('fromLanguage','?')
+    ll       = info.get('learningLanguage','?')
+    tok_str  = red("EXPIRED") if exp else green("active")
+
+    from rich.panel import Panel
+    _con.print(Panel(
+        f"[bold bright_white]{username}[/]  [dim]{acc.get('sub','?')}[/]\n\n"
+        f"  [dim]streak  [/] [yellow]{streak}[/] days\n"
+        f"  [dim]total xp[/] [steel_blue1]{xp:,}[/]\n"
+        f"  [dim]gems    [/] [cyan]{gems:,}[/]\n"
+        f"  [dim]learning[/] {fl} [dim]→[/] {ll}\n\n"
+        f"  [dim]token   [/] {tok_str}\n"
+        f"  [dim]expires [/] [dim]{jwt_expires_at(jwt)}[/]",
+        title="[bold cyan]account info[/]",
+        border_style="cyan",
+        padding=(0, 2),
+        width=52,
+    ))
     print()
-    input(f" {dim('Press Enter to continue...')}")
+    _con.input(f"  [dim]↵ continue[/dim] ")
 
 # ─── UI menus ─────────────────────────────────────────────────────
-def get_delay():
+def jwt_days_left(token: str) -> int:
     try:
-        val = int(input(f" {cyan('Delay between requests (ms) [default=1500]:')}") or"1500")
+        exp = decode_jwt(token).get("exp")
+        if not exp:
+            return 999
+        return max(0, int((exp - time.time()) / 86400))
+    except Exception:
+        return 0
+
+def check_jwt_warnings(accounts: list):
+    """Print warnings for accounts with tokens expiring soon."""
+    for acc in accounts:
+        days = jwt_days_left(acc.get("jwt", ""))
+        uname = acc.get("info", {}).get("username", acc.get("sub", "?"))
+        if days == 0:
+            log(f"[bold]{uname}[/bold] — token [bright_red]EXPIRED[/bright_red]", "warning")
+        elif days <= 3:
+            log(f"[bold]{uname}[/bold] — token expires in [yellow]{days}d[/yellow]", "warning")
+
+def get_delay(default_ms: int = None) -> int:
+    default_ms = default_ms or CFG.get("delay_ms", 1500)
+    try:
+        raw = _con.input(f"  [dim]delay ms[/] [dim][default={default_ms}][/] [dim]>[/] ").strip()
+        val = int(raw) if raw else default_ms
         return max(200, val)
     except ValueError:
-        return 1500
+        return default_ms
+
+def select_accounts_multi() -> list:
+    """Select one or more accounts to farm. Returns list of account dicts."""
+    accounts = load_accounts()
+    if not accounts:
+        log("No accounts saved.", "warning")
+        return []
+    if len(accounts) == 1:
+        return accounts
+
+    items = []
+    for acc in accounts:
+        info  = acc.get("info", {})
+        uname = info.get("username", acc.get("sub", "?"))
+        exp   = jwt_expired(acc.get("jwt", ""))
+        days  = jwt_days_left(acc.get("jwt", ""))
+        tag   = f"[bright_red]EXPIRED[/]" if exp else (f"[yellow]{days}d[/]" if days <= 5 else f"[dim]streak {info.get('streak',0)}[/]")
+        items.append((uname, tag))
+
+    items.append(("All accounts", ""))
+    items.append(("Back", ""))
+
+    choice = arrow_menu("Select Account(s)", items)
+    if choice == -1 or choice == len(accounts) + 1:
+        return []
+    if choice == len(accounts):
+        return [a for a in accounts if not jwt_expired(a.get("jwt", ""))]
+    return [accounts[choice]]
 
 def farm_menu():
     cls()
+    accounts = load_accounts()
+    check_jwt_warnings(accounts)
     acc = select_account()
     if not acc: return
     if jwt_expired(acc.get("jwt","")):
         log("JWT expired. Please re-add this account.","error")
-        input(f"\n {dim('Press Enter...')}")
+        _con.input(f"\n [dim]Press Enter...[/dim]")
         return
 
     print()
-    log(f"Refreshing account info for {bold(acc.get('info',{}).get('username','?'))}...","info")
+    log(f"Refreshing account info for [bold]{acc.get('info',{}).get('username','?')}[/bold]...","info")
     info = refresh_account(acc)
     skill_id = extract_skill_id(info.get("currentCourse"))
 
@@ -1955,7 +2087,7 @@ def farm_menu():
             log("Stopped.", "warning")
 
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-        input(f"\n  {dim('Press Enter to continue...')}")
+        _con.input(f"\n  [dim]Press Enter to continue...[/dim]")
 
 def accounts_menu():
     OPTS = [
@@ -1977,11 +2109,11 @@ def accounts_menu():
         elif choice == 1:
             cls()
             list_accounts()
-            input(f"\n  {dim('Press Enter...')}")
+            _con.input(f"\n  [dim]Press Enter...[/dim]")
         elif choice == 2:
             cls()
             remove_account()
-            input(f"\n  {dim('Press Enter...')}")
+            _con.input(f"\n  [dim]Press Enter...[/dim]")
         elif choice == 3:
             acc = select_account()
             if acc:
@@ -1990,29 +2122,51 @@ def accounts_menu():
             return
 
 def settings_menu():
-    OPTS = [
-        ("Clear all accounts", "Delete every saved account from disk"),
-        ("Show accounts file", "Print the path to accounts.json"),
-        ("Back",               ""),
-    ]
     while True:
-        choice = arrow_menu("Settings", OPTS, subtitle=f"File: {ACCOUNTS_FILE}")
+        cfg   = load_config()
+        debug = cfg.get("debug", False)
+        delay = cfg.get("delay_ms", 1500)
+        OPTS  = [
+            ("Default delay",    f"{delay} ms"),
+            ("Debug mode",       "[bright_green]ON[/]" if debug else "[dim]off[/]"),
+                ("Clear all accounts", "Delete every saved account from disk"),
+            ("Show accounts file", "Print the path to accounts.json"),
+            ("Back",               ""),
+        ]
+        choice = arrow_menu("Settings", OPTS)
         if choice == 0:
+            try:
+                raw = _con.input(f"  [cyan]Default delay ms[/cyan] [dim][current={delay}][/dim] > ").strip()
+                if raw:
+                    cfg["delay_ms"] = max(200, int(raw))
+                    save_config(cfg)
+                    global CFG
+                    CFG = cfg
+                    log(f"Delay set to {cfg['delay_ms']}ms", "success")
+            except ValueError:
+                log("Invalid number.", "error")
+            _con.input("  [dim]Press Enter...[/dim] ")
+        elif choice == 1:
+            cfg["debug"] = not debug
+            save_config(cfg)
+            CFG = cfg
+            log(f"Debug mode {'enabled' if cfg['debug'] else 'disabled'}.", "success")
+            _con.input("  [dim]Press Enter...[/dim] ")
+        elif choice == 2:
             cls()
-            confirm = input(f"  {red('Type YES to confirm delete all accounts:')} ").strip()
+            confirm = _con.input("  [bright_red]Type YES to confirm:[/bright_red] ").strip()
             if confirm == "YES":
                 save_accounts([])
                 log("All accounts cleared.", "success")
             else:
                 log("Cancelled.", "info")
-            input(f"  {dim('Press Enter...')}")
-        elif choice == 1:
-            log(f"Accounts file: {ACCOUNTS_FILE}", "info")
-            input(f"  {dim('Press Enter...')}")
-        elif choice in (-1, 2):
+            _con.input("  [dim]Press Enter...[/dim] ")
+        elif choice == 3:
+            log(f"accounts.json: [dim]{ACCOUNTS_FILE}[/dim]", "info")
+            log(f"config.json:   [dim]{CONFIG_FILE}[/dim]", "info")
+            _con.input("  [dim]Press Enter...[/dim] ")
+        elif choice in (-1, 4):
             return
-
-        input(f" {dim('Press Enter...')}")
 
 def check_streak_status():
     """Check & auto-protect streak for all accounts."""
@@ -2020,17 +2174,17 @@ def check_streak_status():
     accounts = load_accounts()
     if not accounts:
         log("No accounts saved.","warning")
-        input(f"\n {dim('Press Enter...')}")
+        _con.input(f"\n [dim]Press Enter...[/dim]")
         return
 
-    print(box([" Checking streak status for all accounts..."], title=" Streak Status", color="93"))
+    print(f"  [bold cyan]streak status[/]\n")
     print()
 
     for acc in accounts:
         info = acc.get("info", {})
         username = info.get("username", acc.get("sub","?"))
         if jwt_expired(acc.get("jwt","")):
-            log(f"{username}: {red('JWT expired')}","error")
+            log(f"{username}: [bright_red]JWT expired[/bright_red]","error")
             continue
         try:
             info = get_user_info(acc["jwt"], acc["sub"])
@@ -2045,12 +2199,348 @@ def check_streak_status():
         status = green(" done today") if done_today else yellow(" not done today")
         log(f"{bold(username)} — Streak: {yellow(str(streak))} days — {status}","stat")
 
-    input(f"\n {dim('Press Enter to continue...')}")
+    _con.input(f"\n [dim]Press Enter to continue...[/dim]")
+
+
+
+# ─── Multi-account farm ───────────────────────────────────────────
+
+class AccountFarmState:
+    def __init__(self, username):
+        self.username  = username
+        self.running   = True
+        self.xp        = 0
+        self.gems      = 0
+        self.calls     = 0
+        self.errors    = 0
+        self.status    = "starting"
+        self.start_time= time.time()
+        self._lock     = threading.Lock()
+
+    def stop(self):
+        with self._lock:
+            self.running = False
+
+    def is_running(self):
+        with self._lock:
+            return self.running
+
+    def add_xp(self, n):
+        with self._lock:
+            self.xp += n; self.calls += 1
+
+    def add_gems(self, n):
+        with self._lock:
+            self.gems += n; self.calls += 1
+
+    def add_error(self):
+        with self._lock:
+            self.errors += 1
+
+    def set_status(self, s):
+        with self._lock:
+            self.status = s
+
+    def elapsed(self):
+        secs = int(time.time() - self.start_time)
+        return f"{secs//60:02d}:{secs%60:02d}"
+
+    def rate_xp(self):
+        elapsed = max(1, time.time() - self.start_time)
+        return int(self.xp / elapsed * 3600)
+
+
+def _multi_xp_worker(acc, st, delay_ms, stagger_s):
+    """XP farm thread for one account."""
+    time.sleep(stagger_s)
+    jwt      = acc["jwt"]
+    sub      = acc["sub"]
+    info     = acc.get("info", {})
+    use_stories       = True
+    consecutive_429   = 0
+    MAX_429           = 2
+
+    while st.is_running():
+        try:
+            if use_stories and consecutive_429 < MAX_429:
+                status = farm_xp_once_stories(jwt, sub, info)
+                if status == 200:
+                    st.add_xp(499)
+                    consecutive_429 = 0
+                    st.set_status("ok")
+                elif status == 429:
+                    consecutive_429 += 1
+                    st.set_status("429")
+                    if consecutive_429 >= MAX_429:
+                        use_stories = False
+                    time.sleep(delay_ms / 1000 * 2)
+                    continue
+                else:
+                    use_stories = False
+                    st.set_status(f"err{status}")
+            else:
+                skill_id = extract_skill_id(info.get("currentCourse"))
+                if not skill_id:
+                    st.set_status("no_skill")
+                    st.stop(); break
+                ok, earned = farm_xp_once_unit(jwt, sub, info, skill_id)
+                if ok:
+                    st.add_xp(earned)
+                    st.set_status("ok")
+                else:
+                    st.add_error()
+                    st.set_status("err")
+                    if st.errors >= 5:
+                        st.stop(); break
+                    time.sleep(delay_ms / 1000 * 3)
+                    continue
+        except Exception as e:
+            st.add_error()
+            st.set_status("exc")
+            if st.errors >= 5:
+                st.stop(); break
+        time.sleep(delay_ms / 1000)
+
+
+def _multi_gems_worker(acc, st, delay_ms, stagger_s):
+    """Gem farm thread for one account."""
+    time.sleep(stagger_s)
+    jwt  = acc["jwt"]
+    sub  = acc["sub"]
+    info = acc.get("info", {})
+
+    while st.is_running():
+        try:
+            ok, earned = farm_gem_once(jwt, sub, info)
+            if ok:
+                st.add_gems(earned)
+                st.set_status("ok")
+            else:
+                st.add_error()
+                st.set_status("err")
+                if st.errors >= 5:
+                    st.stop(); break
+        except Exception:
+            st.add_error()
+            if st.errors >= 5:
+                st.stop(); break
+        time.sleep(delay_ms / 1000)
+
+
+def _multi_mixed_worker(acc, st, delay_ms, stagger_s):
+    time.sleep(stagger_s)
+    jwt      = acc["jwt"]
+    sub      = acc["sub"]
+    info     = acc.get("info", {})
+    skill_id = extract_skill_id(info.get("currentCourse"))
+    use_xp   = True
+
+    while st.is_running():
+        try:
+            if use_xp:
+                status = farm_xp_once_stories(jwt, sub, info)
+                if status == 200:
+                    st.add_xp(499); st.set_status("ok")
+                elif status == 429:
+                    st.set_status("429")
+                else:
+                    if skill_id:
+                        ok, earned = farm_xp_once_unit(jwt, sub, info, skill_id)
+                        if ok: st.add_xp(earned); st.set_status("ok")
+            else:
+                ok, earned = farm_gem_once(jwt, sub, info)
+                if ok: st.add_gems(earned); st.set_status("ok")
+            use_xp = not use_xp
+        except Exception:
+            st.add_error()
+            if st.errors >= 5:
+                st.stop(); break
+        time.sleep(delay_ms / 1000)
+
+
+def _render_multi_dashboard(states, farm_type, delay_ms):
+    """Render live table of all account states. Returns string."""
+    lines = []
+    w = min(term_width(), 90)
+    lines.append(f"  [bold]Multi-Account Farm[/bold]  [dim]{farm_type}  ·  delay {delay_ms}ms  ·  Ctrl+C to stop[/dim]")
+    lines.append(f"  [dim]{'─' * (w - 4)}[/dim]")
+    hdr = (
+        f"  [dim]{'account':<16}{'xp':>8}{'gems':>8}{'calls':>7}{'err':>5}  {'rate':>10}  {'time':>6}  status[/dim]"
+    )
+    lines.append(hdr)
+    lines.append(f"  [dim]{'─' * (w - 4)}[/dim]")
+    for st in states:
+        status_color = {"ok": "bright_green", "429": "yellow",
+                        "err": "bright_red", "exc": "bright_red",
+                        "no_skill": "yellow", "starting": "dim"}.get(
+                        st.status.split("err")[0] if "err" in st.status else st.status, "dim")
+        running_icon = "[bright_green]●[/]" if st.is_running() else "[dim]○[/]"
+        rate = f"{st.rate_xp():,}/hr" if st.xp > 0 else "—"
+        lines.append(
+            f"  {running_icon} [bold white]{st.username:<15}[/]"
+            f"[yellow]{st.xp:>8,}[/]"
+            f"[cyan]{st.gems:>8,}[/]"
+            f"[dim]{st.calls:>7}[/]"
+            f"[{'bright_red' if st.errors else 'dim'}]{st.errors:>5}[/]"
+            f"  [steel_blue1]{rate:>10}[/]"
+            f"  [dim]{st.elapsed():>6}[/]"
+            f"  [{status_color}]{st.status}[/]"
+        )
+    lines.append(f"  [dim]{'─' * (w - 4)}[/dim]")
+    total_xp   = sum(s.xp   for s in states)
+    total_gems = sum(s.gems for s in states)
+    total_calls= sum(s.calls for s in states)
+    lines.append(
+        f"  [dim]{'TOTAL':<17}[/dim]"
+        f"[bold yellow]{total_xp:>8,}[/]"
+        f"[bold cyan]{total_gems:>8,}[/]"
+        f"[dim]{total_calls:>7}[/]"
+    )
+    return "\n".join(lines)
+
+
+def multi_farm(accs, farm_type, delay_ms):
+    """Run farm_type across multiple accounts with one thread each."""
+    cls()
+    print()
+
+    # Stagger starts by 500ms per account to avoid burst
+    states  = []
+    threads = []
+    worker_map = {
+        "xp":    _multi_xp_worker,
+        "gems":  _multi_gems_worker,
+        "mixed": _multi_mixed_worker,
+    }
+    worker_fn = worker_map.get(farm_type, _multi_xp_worker)
+
+    for i, acc in enumerate(accs):
+        uname = acc.get("info", {}).get("username", acc.get("sub", "?"))
+        st    = AccountFarmState(uname)
+        states.append(st)
+        t = threading.Thread(
+            target=worker_fn,
+            args=(acc, st, delay_ms, i * 0.5),
+            daemon=True
+        )
+        threads.append(t)
+
+    # Ctrl+C handler
+    _stop_all = lambda: [s.stop() for s in states]
+    def _sig(sig, frame):
+        _stop_all()
+        print()
+        log("Stopping all accounts...", "warning")
+    signal.signal(signal.SIGINT, _sig)
+
+    for t in threads:
+        t.start()
+
+    # Live dashboard loop
+    try:
+        while any(s.is_running() for s in states):
+            dashboard = _render_multi_dashboard(states, farm_type, delay_ms)
+            # Clear and redraw
+            lines_count = dashboard.count("\n") + 1
+            print(f"\033[{lines_count}A\033[J" if hasattr(sys.stdout, "write") else "", end="")
+            print(dashboard)
+            time.sleep(0.5)
+        # Final render
+        print(_render_multi_dashboard(states, farm_type, delay_ms))
+    except KeyboardInterrupt:
+        _stop_all()
+
+    for t in threads:
+        t.join(timeout=3)
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    print()
+    log("Multi-account farm complete.", "success")
+    _con.input("\n  [dim]Press Enter...[/dim] ")
+
+
+def multi_farm_menu():
+    accounts = load_accounts()
+    active   = [a for a in accounts if not jwt_expired(a.get("jwt", ""))]
+
+    if not active:
+        log("No active accounts.", "warning")
+        _con.input("\n  [dim]Press Enter...[/dim] ")
+        return
+
+    if len(active) == 1:
+        log("Only 1 active account — use regular Farm menu instead.", "warning")
+        _con.input("\n  [dim]Press Enter...[/dim] ")
+        return
+
+    # Account selection
+    cls()
+    items = []
+    for acc in active:
+        info  = acc.get("info", {})
+        uname = info.get("username", acc.get("sub", "?"))
+        days  = jwt_days_left(acc.get("jwt", ""))
+        tag   = f"[yellow]{days}d left[/]" if days <= 5 else f"[dim]streak {info.get('streak',0)}  xp {info.get('totalXp',0):,}[/]"
+        items.append((uname, tag))
+    items.append(("All accounts", f"[dim]{len(active)} accounts[/]"))
+    items.append(("Back", ""))
+
+    sel = arrow_menu("Multi Farm — Select Accounts", items,
+                     subtitle=f"{len(active)} active account(s)")
+    if sel == -1 or sel == len(active) + 1:
+        return
+
+    selected = active if sel == len(active) else [active[sel]]
+    if len(selected) < 2 and sel != len(active):
+        log("Select 'All accounts' or use regular Farm for single account.", "info")
+        _con.input("\n  [dim]Press Enter...[/dim] ")
+        return
+
+    # Farm type
+    TYPE_OPTS = [
+        ("XP Farm",    "Stories 499 XP per account"),
+        ("Gem Farm",   "30 gems per call per account"),
+        ("Mixed Farm", "XP + Gems alternating per account"),
+        ("Back",       ""),
+    ]
+    type_map = {0: "xp", 1: "gems", 2: "mixed"}
+    t_choice = arrow_menu("Multi Farm — Type",
+                          TYPE_OPTS,
+                          subtitle=f"{len(selected)} account(s) selected")
+    if t_choice == -1 or t_choice == 3:
+        return
+
+    delay = get_delay()
+
+    # Refresh all selected accounts
+    print()
+    log(f"Refreshing {len(selected)} account(s)...", "info")
+    refreshed = []
+    for acc in selected:
+        try:
+            info = get_user_info(acc["jwt"], acc["sub"])
+            acc["info"] = info
+            refreshed.append(acc)
+            log(f"  [bold]{info.get('username','?')}[/bold] — streak {info.get('streak',0)}  xp {info.get('totalXp',0):,}", "success")
+        except Exception as e:
+            log(f"  Skip {acc.get('info',{}).get('username','?')}: {e}", "warning")
+
+    if not refreshed:
+        log("No accounts could be refreshed.", "error")
+        _con.input("\n  [dim]Press Enter...[/dim] ")
+        return
+
+    print()
+    log(f"Starting multi-farm: [bold]{len(refreshed)} accounts[/bold]  ·  {type_map[t_choice].upper()}  ·  {delay}ms delay", "farm")
+    time.sleep(0.5)
+
+    multi_farm(refreshed, type_map[t_choice], delay)
 
 # ─── Main menu ────────────────────────────────────────────────────
 def main_menu():
     OPTS = [
         ("Farm",             "XP / Gems / Streak / Mixed / Quest / League"),
+        ("Multi Farm",       "Farm multiple accounts simultaneously"),
         ("Account Manager",  "Add, remove, and view saved accounts"),
         ("Shop Items",       "Browse and buy Duolingo shop items"),
         ("Generate Account", "Auto-generate new Duolingo accounts"),
@@ -2062,36 +2552,40 @@ def main_menu():
         accounts = load_accounts()
         n_acc    = len(accounts)
         n_exp    = sum(1 for a in accounts if jwt_expired(a.get("jwt", "")))
+        n_warn   = sum(1 for a in accounts if 0 < jwt_days_left(a.get("jwt","")) <= 3)
         if n_acc:
-            sub_line = (f"{n_acc} account(s) — {n_exp} expired"
-                        if n_exp else f"{n_acc} account(s) — all active")
+            if n_exp:
+                sub_line = f"{n_acc} account(s) — [bright_red]{n_exp} expired[/bright_red]"
+            elif n_warn:
+                sub_line = f"{n_acc} account(s) — [yellow]{n_warn} expiring soon[/yellow]"
+            else:
+                sub_line = f"{n_acc} account(s) — [bright_green]all active[/bright_green]"
         else:
             sub_line = "No accounts saved — add one first"
-
-        cls()
-        print(center(magenta(BANNER_ART)))
-        print(center(f"{bold('PyLingo')}  {dim('v'+VERSION)}  {dim('─')}  {dim('Duolingo farming tool')}"))
-        print()
 
         idx = arrow_menu("Main Menu", OPTS, subtitle=sub_line)
 
         if idx == 0:
             farm_menu()
         elif idx == 1:
-            accounts_menu()
+            multi_farm_menu()
         elif idx == 2:
+            accounts_menu()
+        elif idx == 3:
             acc = select_account()
             if acc:
                 shop_items_menu(acc)
-        elif idx == 3:
-            generate_accounts_menu()
         elif idx == 4:
-            check_streak_status()
+            generate_accounts_menu()
         elif idx == 5:
+            check_streak_status()
+        elif idx == 6:
             settings_menu()
-        elif idx in (6, -1):
+        elif idx in (7, -1):
             cls()
-            print(center(f"\n  {bold(green('Goodbye!'))}  {dim('PyLingo v'+VERSION)}\n"))
+            print()
+            print(f"  [bold bright_white]Goodbye![/]  [dim]pylingo v{VERSION}[/]")
+            print()
             sys.exit(0)
 
 # ─── Entry point ─────────────────────────────────────────────────
