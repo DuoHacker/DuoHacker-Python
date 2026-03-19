@@ -65,7 +65,7 @@ python pylingo.py
 
   ⠹ Fetching pylingo.py
   ⠼ Fetching requirements.txt
-  ✓ Up to date  2.0.0
+  ✓ Up to date  1.0.0
   ✓ Dependencies up to date
 ```
 
@@ -187,7 +187,7 @@ Farms XP in a loop until your score is 1000 XP ahead of rank 2 in the current le
 Navigation uses number keys — type the number and press Enter. All menus display per-category color coding.
 
 ```
-  PyLingo  2.0.0  ·  14:32
+  PyLingo  1.0.0  ·  14:32
 
   3 accounts — 1 expiring soon
 
