@@ -1,4 +1,4 @@
-``` 
+```
   ██████╗ ██╗   ██╗██╗     ██╗███╗   ██╗  ██████╗  ██████╗
   ██╔══██╗╚██╗ ██╔╝██║     ██║████╗  ██║ ██╔════╝ ██╔═══██╗
   ██████╔╝ ╚████╔╝ ██║     ██║██╔██╗ ██║ ██║  ███╗██║   ██║
@@ -9,21 +9,20 @@
 
 # PyLingo
 
-Duolingo automation tool — XP farming, gem farming, streak farming, and practice auto-solving via browser automation. Professional terminal UI with arrow-key navigation.
+Duolingo automation tool — XP farming, gem farming, streak farming, practice auto-solving, and daily quest completion. Professional terminal UI powered by `rich`.
 
 ---
 
 ## Requirements
 
 - Python 3.8 or higher
-- Internet connection (for GitHub auto-update and Duolingo API)
+- Internet connection
 
-All Python dependencies are installed automatically on first run.
+All Python dependencies are installed automatically on first run via the launcher.
 
 | Package | Purpose | Auto-installed |
 |---|---|---|
-| `requests` | HTTP client for Duolingo API | Yes |
-| `questionary` | Interactive terminal select menus | Yes |
+| `rich` | Terminal UI, progress bars, tables | Yes |
 | `playwright` | Browser automation for Practice Farm | Yes, on demand |
 
 ---
@@ -31,7 +30,7 @@ All Python dependencies are installed automatically on first run.
 ## Installation
 
 ```bash
-git clone https://github.com/not2pixel/PyLingo.git
+git clone []()
 cd PyLingo
 ```
 
@@ -47,9 +46,9 @@ No manual `pip install` needed. The launcher handles everything.
 python Launcher.py
 ```
 
-The launcher fetches the latest `pylingo.py` from GitHub, caches it locally, then executes it. You always run the most recent version without doing anything manually.
+The launcher fetches the latest `pylingo.py` and `requirements.txt` from GitHub, installs any new dependencies, caches locally, then runs. You always get the most recent version automatically.
 
-### Run directly (no update check)
+### Run directly (skip update check)
 
 ```bash
 python pylingo.py
@@ -59,17 +58,15 @@ python pylingo.py
 
 ## Launcher
 
-`Launcher.py` is a standalone auto-updater. It has zero external dependencies and runs on pure Python stdlib.
+`Launcher.py` is a zero-dependency auto-updater (pure Python stdlib). Every launch fetches the latest script and requirements from GitHub.
 
 ```
-  ██████╗ ██╗   ██╗██╗     ██╗███╗   ██╗  ██████╗  ██████╗
-  ...
-
   PyLingo Launcher  v1.0.0
-  ────────────────────────────────────────────────────────
-  09:14:22  OK  Cache is fresh (312s old) — skipping update check
-  09:14:22  OK  Already up to date (2.0.0)
-  09:14:22  >>  Launching PyLingo 2.0.0...
+
+  ⠹ Fetching pylingo.py
+  ⠼ Fetching requirements.txt
+  ✓ Up to date  2.0.0
+  ✓ Dependencies up to date
 ```
 
 ### Launcher options
@@ -77,24 +74,21 @@ python pylingo.py
 ```
 python Launcher.py [options]
 
-  --update        Force re-download from GitHub, then run
-  --offline       Run from cache without checking for updates
-  --check         Check for update and exit (no launch)
-  --cache-info    Print cache metadata and exit
-  --help          Show this help
+  --offline    Run from cache, skip update and dependency check
+  --help       Show this help
 ```
 
-### How caching works
-
-The launcher stores a local copy of `pylingo.py` in `.pylingo_cache/`. It re-checks GitHub at most once per hour using SHA-256 hash comparison — if the file has not changed, nothing is downloaded. On a failed network request, it falls back to the cached version silently.
+### Cache structure
 
 ```
 PyLingo/
 ├── Launcher.py
 ├── pylingo.py
 ├── accounts.json          ← created on first account add
+├── config.json            ← created on first settings change
 └── .pylingo_cache/
     ├── pylingo.py         ← cached script from GitHub
+    ├── requirements.txt   ← cached requirements from GitHub
     └── meta.json          ← version, hash, timestamps
 ```
 
@@ -109,18 +103,18 @@ JWT is the authentication token from your active Duolingo browser session.
 1. Go to [duolingo.com](https://www.duolingo.com) and log in
 2. Open DevTools — `Ctrl+Shift+I` on Windows/Linux, `Cmd+Option+I` on Mac
 3. Go to the **Console** tab
-4. Run:
+4. Paste and run:
    ```js
    document.cookie.match(/jwt_token=([^;]+)/)[1]
    ```
-5. Copy the output
+5. Copy the output and paste it into PyLingo when prompted
 
 **Mobile**
 
-- iOS: [Web Inspector](https://apps.apple.com/us/app/web-inspector/id1584825745)
-- Android: [Kiwi Browser](https://play.google.com/store/apps/details?id=com.kiwibrowser.browser) with DevTools enabled
+- iOS: [Web Inspector]()
+- Android: [Kiwi Browser]() with DevTools enabled
 
-> JWT tokens expire after roughly 30 days or when you log out. If you receive a 403 error, get a fresh token and re-add the account.
+> JWT tokens expire after roughly 30 days or when you log out. PyLingo warns you when a token has 3 days or less remaining. If you receive a 403 error, get a fresh token and re-add the account.
 
 ---
 
@@ -128,102 +122,119 @@ JWT is the authentication token from your active Duolingo browser session.
 
 ### XP Farm
 
-Calls the Stories API endpoint for 499 XP per request. Automatically falls back to UNIT_TEST sessions (~110 XP) if rate-limited (HTTP 429). Displays live XP/hr rate in the terminal.
+Calls the Stories API endpoint for 499 XP per request. Falls back to UNIT_TEST sessions (~110 XP) when rate-limited. Displays live progress with a rich progress bar.
 
 ```
-  09:14:23  >>  XP Farm  |  Stories 499 XP  (fallback UNIT_TEST 110 XP)
-  09:14:23      skill_id: abc123...
-
-  >> +499 XP   total=4,970   rate=87,400/hr   00:03
+  ● XP  ████████████░░░░░░░░  4,970  0:00:03
 ```
 
 ### Gem Farm
 
-Calls the reward endpoint in configurable batches. Each successful call yields 30 gems. Automatically stops after 5 consecutive errors.
+Calls the reward endpoint in configurable batches of 30 gems per call. Stops automatically after 5 consecutive errors.
 
 ```
-  >> +90 gems   total=720   rate=12,600/hr   00:03
+  ● gems  ████████████░░░░░░░░  720  0:00:03
 ```
 
 ### Streak Farm — Safe mode
 
-Calculates your account age in days, then farms GLOBAL_PRACTICE sessions from your account creation date forward. The streak is capped to the number of days your account has existed — it cannot exceed a realistic value.
+Calculates your account age in days, then farms GLOBAL_PRACTICE sessions backwards from your streak start date. The streak is capped to the number of days your account has existed — cannot exceed a realistic value.
 
 ```
-  ╭───────────────── Streak Farm — Safe Mode ─────────────────╮
-  │   Created          2022-03-15                              │
-  │   Account age      1,098 days                             │
-  │   Current streak   0 days                                 │
-  │   Safe target      1,098 days                             │
-  │   To farm          1,098 days                             │
-  ╰────────────────────────────────────────────────────────────╯
+  ╭──────────── Streak Farm — Safe Mode ────────────╮
+  │  Created          2022-03-15                     │
+  │  Account age      1,098 days                     │
+  │  Current streak   0 days                         │
+  │  Safe target      1,098 days                     │
+  ╰──────────────────────────────────────────────────╯
 
-  >> [████████████░░░░░░░░░░░░░░░░░░]  440/1098   streak=440   01:22
+  ● streak days  ████████░░░░░░░░░░  440/1098  0:01:22
 ```
 
 ### Streak Farm — Normal mode
 
-No cap. Goes backwards from your current streak start date. Higher ban risk — confirm prompt required.
+No cap. Goes backwards from your current streak start date. Higher detection risk — confirm prompt required.
 
 ### Mixed Farm
 
-Alternates one XP call and one gem call per loop iteration. Maximises both simultaneously with a single delay setting.
-
-```
-  >> XP=14,970 (86,400/hr)   gems=420 (2,430/hr)   00:10
-```
+Alternates one XP call and one gem call per iteration. Maximises both simultaneously with a single delay setting.
 
 ### Practice Farm
 
-Browser automation via Playwright (Chromium). Navigates to `/practice`, solves challenges automatically (word bank, radio choices, text input), and loops for a configurable number of sessions. Supports headless and headed mode.
+Browser automation via [Playwright](). Navigates to `/practice`, solves challenges automatically (word bank tap, radio select, text input), and loops for a configurable number of sessions. Supports headless and headed mode.
 
-Playwright is not pre-installed. The first time you select Practice Farm you will be prompted to install it (~150 MB, one-time).
+Playwright is not pre-installed. The first time you select Practice Farm (or via Settings → Install Playwright) you will be prompted to install it (~150 MB, one-time).
 
 ```
-  09:14:40  >>  Practice Farm  |  loops=20  headless=True
-  09:14:40      Launching browser...
-
-  >> Practice: 7/20   errors=0   00:48
+  09:14:40  ◆  Practice Farm  loops=20  headless=True
+  09:14:40  ·  Launching browser...
+  09:14:52  ◆  Practice 1/20  errors=0
+  09:15:08  ◆  Practice 2/20  errors=0
 ```
+
+### Auto Daily Quest
+
+Completes all pending daily quests instantly via the Goals API. No delay required — runs once and exits.
+
+### Auto League
+
+Farms XP in a loop until your score is 1000 XP ahead of rank 2 in the current league. Stops automatically when the gap is achieved.
 
 ---
 
 ## Terminal UI
 
-Navigation is done with arrow keys and Enter — no number typing. All menus are rendered using `questionary` with a consistent blue/green color scheme.
+Navigation uses number keys — type the number and press Enter. All menus display per-category color coding.
 
 ```
-  Main Menu
-  > Farm
-    Account Manager
-    Streak Status
-    Settings
-    Exit
+  PyLingo  2.0.0  ·  14:32
+
+  3 accounts — 1 expiring soon
+
+  1. Farm            XP / Gems / Streak / Mixed / Quest / League
+  2. Account Manager  Add, remove, and view saved accounts
+  3. Shop Items       Browse and buy Duolingo shop items
+  4. Generate Account Auto-generate new Duolingo accounts
+  5. Streak Status    Check streak status across all accounts
+  6. Settings         Configure PyLingo options
+
+  0. Exit
+
+  > _
 ```
 
 ---
 
 ## Multi-account support
 
-Add as many accounts as needed. Each account stores its JWT token, user ID, and cached profile info in `accounts.json`. The account selector shows username, streak, XP, and expiry status.
+Add as many accounts as needed. Each account stores its JWT token, user ID, and cached profile in `accounts.json`. The account selector shows username, streak, XP, and token expiry status.
 
-```
-  Select account
-  > 1.  Alice   streak=847  xp=124500
-    2.  Bob     streak=12   xp=8300
-    3.  Charlie   [EXPIRED]  streak=0  xp=200
-    Cancel
-```
+JWT expiry warnings appear automatically:
+- **3 days or less remaining** — yellow warning in main menu subtitle and farm menu
+- **Expired** — red label, blocked from farming
 
 ---
 
-## Settings
+## Config
 
-Accessible from the main menu. Available options:
+Settings are stored in `config.json` (created automatically on first change).
 
-- Clear all saved accounts
-- Install or reinstall Playwright
-- Show the path to `accounts.json`
+| Key | Default | Description |
+|---|---|---|
+| `delay_ms` | `1500` | Default delay between farm requests (ms) |
+| `debug` | `false` | Print raw API responses |
+
+Editable via **Settings** in the main menu or directly in the JSON file.
+
+---
+
+## Settings menu
+
+- **Default delay** — change the farm request delay (minimum 200 ms)
+- **Debug mode** — toggle raw API response logging
+- **Install Playwright** — install or reinstall the browser engine for Practice Farm
+- **Clear all accounts** — wipe `accounts.json`
+- **Show accounts file** — print paths to `accounts.json` and `config.json`
 
 ---
 
@@ -233,10 +244,12 @@ Accessible from the main menu. Available options:
 PyLingo/
 ├── Launcher.py        Auto-updater and entry point
 ├── pylingo.py         Main tool
-├── accounts.json      Saved accounts (created automatically)
+├── accounts.json      Saved accounts (auto-created)
+├── config.json        Settings (auto-created)
 ├── README.md
 └── .pylingo_cache/
     ├── pylingo.py     Cached version from GitHub
+    ├── requirements.txt
     └── meta.json      Update metadata
 ```
 
@@ -244,29 +257,31 @@ PyLingo/
 
 ## Security
 
-- JWT tokens are stored locally in `accounts.json` in plain text. Keep this file private and do not commit it to version control.
+- JWT tokens are stored in `accounts.json` in plain text. Keep this file private and do not commit it to version control.
 - PyLingo makes HTTPS requests only to `www.duolingo.com` and `stories.duolingo.com`.
 - The launcher fetches scripts only from `raw.githubusercontent.com/not2pixel/PyLingo`.
 - No data is sent to any third-party service.
 
-Add `accounts.json` to your `.gitignore`:
+Add these to your `.gitignore`:
 
 ```
 accounts.json
+config.json
 .pylingo_cache/
 ```
+
+---
+
+## Credits
+
+- API endpoints and session payloads referenced from [DuoXPy]()
+- Browser automation approach inspired by [DuoHacker]()
 
 ---
 
 ## Disclaimer
 
 This project is for educational and research purposes. Automating Duolingo activity may violate their [Terms of Service](https://www.duolingo.com/terms). Use at your own risk. The authors are not responsible for any account actions taken by Duolingo.
-
----
-
-## Credits
-
-API endpoints and session payloads referenced from [DuoXPy](https://github.com/DuoXPy/DuoXPy-Bot) and the DuoHacker userscript.
 
 ---
 
