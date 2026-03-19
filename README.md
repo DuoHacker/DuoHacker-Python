@@ -23,7 +23,6 @@ All Python dependencies are installed automatically on first run via the launche
 | Package | Purpose | Auto-installed |
 |---|---|---|
 | `rich` | Terminal UI, progress bars, tables | Yes |
-| `playwright` | Browser automation for Practice Farm | Yes, on demand |
 
 ---
 
@@ -159,19 +158,6 @@ No cap. Goes backwards from your current streak start date. Higher detection ris
 
 Alternates one XP call and one gem call per iteration. Maximises both simultaneously with a single delay setting.
 
-### Practice Farm
-
-Browser automation via [Playwright](). Navigates to `/practice`, solves challenges automatically (word bank tap, radio select, text input), and loops for a configurable number of sessions. Supports headless and headed mode.
-
-Playwright is not pre-installed. The first time you select Practice Farm (or via Settings → Install Playwright) you will be prompted to install it (~150 MB, one-time).
-
-```
-  09:14:40  ◆  Practice Farm  loops=20  headless=True
-  09:14:40  ·  Launching browser...
-  09:14:52  ◆  Practice 1/20  errors=0
-  09:15:08  ◆  Practice 2/20  errors=0
-```
-
 ### Auto Daily Quest
 
 Completes all pending daily quests instantly via the Goals API. No delay required — runs once and exits.
@@ -232,7 +218,6 @@ Editable via **Settings** in the main menu or directly in the JSON file.
 
 - **Default delay** — change the farm request delay (minimum 200 ms)
 - **Debug mode** — toggle raw API response logging
-- **Install Playwright** — install or reinstall the browser engine for Practice Farm
 - **Clear all accounts** — wipe `accounts.json`
 - **Show accounts file** — print paths to `accounts.json` and `config.json`
 
