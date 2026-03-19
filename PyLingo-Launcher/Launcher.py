@@ -90,18 +90,6 @@ class Spinner:
         if self._thread: self._thread.join()
         print(f"\r  {red('x')} {msg:<70}")
 
-
-def _task(label, status=""):
-    plain = re.sub(r'\033\[[0-9;]*m', '', status)
-    pad   = tw() - len(label) - len(plain) - 6
-    bar   = dim("." * max(pad, 1))
-    print(f"  {dim('[')} {label} {bar} {status} {dim(']')}")
-
-def _section(title):
-    w   = tw()
-    pad = (w - len(title) - 4) // 2
-    print(_c("-" * pad + "  " + title + "  " + "-" * (w - pad - len(title) - 4), "34"))
-
 def load_meta():
     if META_FILE.exists():
         try:
@@ -162,7 +150,6 @@ def do_requirements(req_body):
     old_hash = meta.get("req_hash", "")
 
     if new_hash == old_hash:
-        _task("Dependencies", dim("up to date"))
         return
 
     spin = Spinner()
@@ -237,12 +224,11 @@ def do_update():
     if req_status == 200:
         do_requirements(req_body)
     else:
-        _task("Requirements", yellow(f"fetch failed (HTTP {req_status})"))
+        spin.warn(f"requirements.txt fetch failed (HTTP {req_status})")
 
     return new_ver
 
 def launch(version):
-    _task("Launch", green(f"PyLingo {version}"))
     ln()
     os.chdir(CACHE_DIR)
     code = CACHE_FILE.read_text("utf-8")
@@ -266,8 +252,6 @@ def main():
     print(_c(BANNER, "95"))
     print(f"  {bold('PyLingo Launcher')}  {dim('v'+LAUNCHER_VERSION)}")
     ln()
-    _section("INIT")
-    ln()
 
     if offline:
         ensure_cache_dir()
@@ -276,19 +260,11 @@ def main():
             sys.exit(1)
         meta    = load_meta()
         version = meta.get("version", "?")
-        _task("Mode", yellow("offline"))
-        _task("Cache", green(f"v{version}"))
         if REQ_FILE.exists():
             do_requirements(REQ_FILE.read_text("utf-8"))
-        else:
-            _task("Dependencies", dim("skipped"))
     else:
-        _task("Mode", cyan("online"))
         version = do_update()
 
-    _task("Ready", green("OK"))
-    ln()
-    _section("START")
     ln()
 
     launch(version)
