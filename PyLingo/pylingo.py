@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 
 VERSION ="1.0.0"
 BANNER_ART = r"""
-  ██████╗ ██╗ ██╗██╗ ██╗███╗ ██╗ ██████╗ ██████╗
-  ██╔══██╗╚██╗ ██╔╝██║ ██║████╗ ██║██╔════╝ ██╔═══██╗
-  ██████╔╝ ╚████╔╝ ██║ ██║██╔██╗ ██║██║ ███╗██║ ██║
-  ██╔═══╝ ╚██╔╝ ██║ ██║██║╚██╗██║██║ ██║██║ ██║
-  ██║ ██║ ███████╗██║██║ ╚████║╚██████╔╝╚██████╔╝
-  ╚═╝ ╚═╝ ╚══════╝╚═╝╚═╝ ╚═══╝ ╚═════╝ ╚═════╝
+  ██████╗ ██╗   ██╗██╗     ██╗███╗   ██╗  ██████╗  ██████╗
+  ██╔══██╗╚██╗ ██╔╝██║     ██║████╗  ██║ ██╔════╝ ██╔═══██╗
+  ██████╔╝ ╚████╔╝ ██║     ██║██╔██╗ ██║ ██║  ███╗██║   ██║
+  ██╔═══╝   ╚██╔╝  ██║     ██║██║╚██╗██║ ██║   ██║██║   ██║
+  ██║        ██║   ███████╗██║██║ ╚████║ ╚██████╔╝╚██████╔╝
+  ╚═╝        ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝
 """
 
 # ─── ANSI color helpers ───────────────────────────────────────────
@@ -89,15 +89,10 @@ def log_stat(label, value, unit=""):
     print(f" {dim('·')} {dim(label+':')} {bold(str(value))}{dim(''+unit) if unit else''}")
 
 
-# ─── Arrow-key menu (curses, stdlib only) ─────────────────────────
-import curses as _curses
+# ─── Numbered menu (no curses) ───────────────────────────────────
 
 def arrow_menu(title, options, subtitle=""):
-    """Interactive arrow-key menu. Returns selected index or -1 on ESC/q.
-    options: list of (label, description) tuples or list of strings.
-    Works on Windows (curses via windows-curses) and Unix.
-    Falls back to numbered prompt if curses unavailable."""
-
+    """Numbered prompt menu. Returns selected index or -1 on 0/q/ESC."""
     items = []
     for o in options:
         if isinstance(o, (list, tuple)) and len(o) >= 2:
@@ -105,109 +100,28 @@ def arrow_menu(title, options, subtitle=""):
         else:
             items.append((str(o), ""))
 
-    result = [-1]
-
-    def _run(stdscr):
-        _curses.curs_set(0)
-        try:
-            _curses.start_color()
-            _curses.use_default_colors()
-            _curses.init_pair(1, _curses.COLOR_CYAN,   -1)  # title / border
-            _curses.init_pair(2, _curses.COLOR_WHITE,  -1)  # normal
-            _curses.init_pair(3, _curses.COLOR_BLACK,  _curses.COLOR_CYAN)  # selected
-            _curses.init_pair(4, _curses.COLOR_YELLOW, -1)  # description
-            _curses.init_pair(5, _curses.COLOR_GREEN,  -1)  # subtitle
-        except Exception:
-            pass
-
-        sel = 0
-        while True:
-            stdscr.erase()
-            h, w = stdscr.getmaxyx()
-            row = 1
-
-            # Title bar
-            t = f"  {title}  "
-            stdscr.addstr(row, max(0, (w - len(t)) // 2), t[:w],
-                          _curses.color_pair(1) | _curses.A_BOLD)
-            row += 1
-
-            if subtitle:
-                s = f"  {subtitle}"
-                stdscr.addstr(row, max(0, (w - len(s)) // 2), s[:w],
-                              _curses.color_pair(5))
-                row += 1
-
-            sep = chr(0x2500) * w
-            try:
-                stdscr.addstr(row, 0, sep[:w], _curses.color_pair(1))
-            except _curses.error:
-                pass
-            row += 1
-
-            for i, (label, desc) in enumerate(items):
-                if row >= h - 2:
-                    break
-                prefix = " > " if i == sel else "   "
-                line   = f"{prefix}{label}"
-                if i == sel:
-                    attr = _curses.color_pair(3) | _curses.A_BOLD
-                    try:
-                        stdscr.addstr(row, 0, (line + " " * w)[:w], attr)
-                    except _curses.error:
-                        pass
-                    if desc and row + 1 < h - 2:
-                        row += 1
-                        try:
-                            stdscr.addstr(row, 0, f"     {desc}"[:w],
-                                          _curses.color_pair(4))
-                        except _curses.error:
-                            pass
-                else:
-                    try:
-                        stdscr.addstr(row, 0, line[:w], _curses.color_pair(2))
-                    except _curses.error:
-                        pass
-                row += 1
-
-            hint = "  [Up/Down] Navigate   [Enter] Select   [q/ESC] Back"
-            try:
-                stdscr.addstr(h - 1, 0, hint[:w])
-            except _curses.error:
-                pass
-            stdscr.refresh()
-
-            key = stdscr.getch()
-            if key in (_curses.KEY_UP, ord('k')):
-                sel = (sel - 1) % len(items)
-            elif key in (_curses.KEY_DOWN, ord('j')):
-                sel = (sel + 1) % len(items)
-            elif key in (10, 13, _curses.KEY_ENTER):
-                result[0] = sel
-                return
-            elif key in (27, ord('q'), ord('Q')):
-                result[0] = -1
-                return
-
+    cls()
+    lines = []
+    if subtitle:
+        lines.append(dim(subtitle))
+        lines.append("")
+    for i, (label, desc) in enumerate(items):
+        suffix = f"  {dim(desc)}" if desc else ""
+        lines.append(f"  {bold(str(i+1)+'.')} {label}{suffix}")
+    lines.append(f"  {bold('0.')} {dim('Back')}")
+    print(box(lines, title=title, color="94"))
+    print()
     try:
-        _curses.wrapper(_run)
-    except Exception:
-        # Plain fallback (e.g. in IDE / redirected stdin)
-        cls()
-        print(box([], title=title, color="94"))
-        print()
-        for i, (label, desc) in enumerate(items):
-            suffix = f"  {dim(desc)}" if desc else ""
-            print(f"  {bold(str(i+1)+'.')} {label}{suffix}")
-        print(f"  {bold('0.')} {dim('Back')}")
-        print()
-        try:
-            v = input(f"  {cyan('Select:')} ").strip()
-            result[0] = int(v) - 1 if v.isdigit() and v != '0' else -1
-        except (ValueError, KeyboardInterrupt):
-            result[0] = -1
-
-    return result[0]
+        v = input(f"  {cyan('Select:')} ").strip()
+        if v == '0' or v.lower() in ('q', 'esc', ''):
+            return -1
+        if v.isdigit():
+            idx = int(v) - 1
+            if 0 <= idx < len(items):
+                return idx
+        return -1
+    except (ValueError, KeyboardInterrupt):
+        return -1
 
 # ─── HTTP helper (stdlib only) ────────────────────────────────────
 USER_AGENTS = [
