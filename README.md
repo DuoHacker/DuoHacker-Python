@@ -261,7 +261,7 @@ config.json
 
 - API endpoints and session payloads referenced from [DuoXPy]()
 - Browser automation approach inspired by [DuoHacker]()
-
+- UI Theme from [DuoKLI]()
 ---
 
 ## Disclaimer
