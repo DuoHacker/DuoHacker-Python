@@ -4,8 +4,8 @@ import os, sys, json, time, hashlib, re, importlib.util, threading, subprocess
 from pathlib import Path
 from datetime import datetime
 
-RAW_BASE         = "https://raw.githubusercontent.com/not2pixel/PyLingo/main/PyLingo"
-RAW_URL          = f"{RAW_BASE}/pylingo.py"
+RAW_BASE         = "https://raw.githubusercontent.com/DuoHacker/DuoHacker-Python/main/src"
+RAW_URL          = f"{RAW_BASE}/main.py"
 RAW_REQ_URL      = f"{RAW_BASE}/requirements.txt"
 CACHE_DIR        = Path(__file__).parent / ".pylingo_cache"
 CACHE_FILE       = CACHE_DIR / "pylingo.py"
