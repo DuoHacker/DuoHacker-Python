@@ -1,13 +1,15 @@
 ```
-  ██████╗ ██╗   ██╗██╗     ██╗███╗   ██╗  ██████╗  ██████╗
-  ██╔══██╗╚██╗ ██╔╝██║     ██║████╗  ██║ ██╔════╝ ██╔═══██╗
-  ██████╔╝ ╚████╔╝ ██║     ██║██╔██╗ ██║ ██║  ███╗██║   ██║
-  ██╔═══╝   ╚██╔╝  ██║     ██║██║╚██╗██║ ██║   ██║██║   ██║
-  ██║        ██║   ███████╗██║██║ ╚████║ ╚██████╔╝╚██████╔╝
-  ╚═╝        ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝
+  _____  _    _  ____  _    _          _____ _  ________ _____  
+ |  __ \| |  | |/ __ \| |  | |   /\   / ____| |/ /  ____|  __ \ 
+ | |  | | |  | | |  | | |__| |  /  \ | |    | ' /| |__  | |__) |
+ | |  | | |  | | |  | |  __  | / /\ \| |    |  < |  __| |  _  / 
+ | |__| | |__| | |__| | |  | |/ ____ \ |____| . \| |____| | \ \ 
+ |_____/ \____/ \____/|_|  |_/_/    \_\_____|_|\_\______|_|  \_\
+                                                                
+                                                                
 ```
 
-# PyLingo
+# DuoHacker
 
 Duolingo automation tool — XP farming, gem farming, streak farming, practice auto-solving, and daily quest completion. Professional terminal UI powered by `rich`.
 
@@ -30,7 +32,7 @@ All Python dependencies are installed automatically on first run via the launche
 
 ```bash
 git clone []()
-cd PyLingo
+cd DuoHacker
 ```
 
 No manual `pip install` needed. The launcher handles everything.
@@ -45,12 +47,12 @@ No manual `pip install` needed. The launcher handles everything.
 python Launcher.py
 ```
 
-The launcher fetches the latest `pylingo.py` and `requirements.txt` from GitHub, installs any new dependencies, caches locally, then runs. You always get the most recent version automatically.
+The launcher fetches the latest `main.py` and `requirements.txt` from GitHub, installs any new dependencies, caches locally, then runs. You always get the most recent version automatically.
 
 ### Run directly (skip update check)
 
 ```bash
-python pylingo.py
+python main.py
 ```
 
 ---
@@ -60,9 +62,9 @@ python pylingo.py
 `Launcher.py` is a zero-dependency auto-updater (pure Python stdlib). Every launch fetches the latest script and requirements from GitHub.
 
 ```
-  PyLingo Launcher  v1.0.0
+  DuoHacker-Python Launcher  v1.0.0
 
-  ⠹ Fetching pylingo.py
+  ⠹ Fetching DuoHacker-Python.py
   ⠼ Fetching requirements.txt
   ✓ Up to date  1.0.0
   ✓ Dependencies up to date
@@ -80,13 +82,13 @@ python Launcher.py [options]
 ### Cache structure
 
 ```
-PyLingo/
+DuoHacker-Python/
 ├── Launcher.py
-├── pylingo.py
+├── main.py
 ├── accounts.json          ← created on first account add
 ├── config.json            ← created on first settings change
-└── .pylingo_cache/
-    ├── pylingo.py         ← cached script from GitHub
+└── .DuoHacker-Python_cache/
+    ├── DuoHacker-Python.py         ← cached script from GitHub
     ├── requirements.txt   ← cached requirements from GitHub
     └── meta.json          ← version, hash, timestamps
 ```
@@ -106,14 +108,14 @@ JWT is the authentication token from your active Duolingo browser session.
    ```js
    document.cookie.match(/jwt_token=([^;]+)/)[1]
    ```
-5. Copy the output and paste it into PyLingo when prompted
+5. Copy the output and paste it into DuoHacker-Python when prompted
 
 **Mobile**
 
 - iOS: [Web Inspector]()
 - Android: [Kiwi Browser]() with DevTools enabled
 
-> JWT tokens expire after roughly 30 days or when you log out. PyLingo warns you when a token has 3 days or less remaining. If you receive a 403 error, get a fresh token and re-add the account.
+> JWT tokens expire after roughly 30 days or when you log out. DuoHacker-Python warns you when a token has 3 days or less remaining. If you receive a 403 error, get a fresh token and re-add the account.
 
 ---
 
@@ -173,7 +175,7 @@ Farms XP in a loop until your score is 1000 XP ahead of rank 2 in the current le
 Navigation uses number keys — type the number and press Enter. All menus display per-category color coding.
 
 ```
-  PyLingo  1.0.0  ·  14:32
+  DuoHacker-Python  1.0.0  ·  14:32
 
   3 accounts — 1 expiring soon
 
@@ -182,7 +184,7 @@ Navigation uses number keys — type the number and press Enter. All menus displ
   3. Shop Items       Browse and buy Duolingo shop items
   4. Generate Account Auto-generate new Duolingo accounts
   5. Streak Status    Check streak status across all accounts
-  6. Settings         Configure PyLingo options
+  6. Settings         Configure DuoHacker-Python options
 
   0. Exit
 
@@ -226,14 +228,14 @@ Editable via **Settings** in the main menu or directly in the JSON file.
 ## File structure
 
 ```
-PyLingo/
+DuoHacker-Python/
 ├── Launcher.py        Auto-updater and entry point
-├── pylingo.py         Main tool
+├── DuoHacker-Python.py         Main tool
 ├── accounts.json      Saved accounts (auto-created)
 ├── config.json        Settings (auto-created)
 ├── README.md
-└── .pylingo_cache/
-    ├── pylingo.py     Cached version from GitHub
+└── .DuoHacker-Python_cache/
+    ├── DuoHacker-Python.py     Cached version from GitHub
     ├── requirements.txt
     └── meta.json      Update metadata
 ```
@@ -243,8 +245,8 @@ PyLingo/
 ## Security
 
 - JWT tokens are stored in `accounts.json` in plain text. Keep this file private and do not commit it to version control.
-- PyLingo makes HTTPS requests only to `www.duolingo.com` and `stories.duolingo.com`.
-- The launcher fetches scripts only from `raw.githubusercontent.com/not2pixel/PyLingo`.
+- DuoHacker-Python makes HTTPS requests only to `www.duolingo.com` and `stories.duolingo.com`.
+- The launcher fetches scripts only from `raw.githubusercontent.com/not2pixel/DuoHacker-Python`.
 - No data is sent to any third-party service.
 
 Add these to your `.gitignore`:
@@ -252,7 +254,7 @@ Add these to your `.gitignore`:
 ```
 accounts.json
 config.json
-.pylingo_cache/
+.DuoHacker-Python_cache/
 ```
 
 ---
